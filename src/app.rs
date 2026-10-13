@@ -29,7 +29,10 @@ struct MixerApp {
     midi_connecting: bool,
     engine: Engine,
     tray_receiver: Receiver<TrayEvent>,
+    tray_available: bool,
+    window_hides: bool,
     quit_requested: bool,
+    closed_to_tray: bool,
     status: String,
     stream_status: String,
     muted: [bool; FADER_COUNT],
@@ -46,7 +49,7 @@ struct MixerApp {
 }
 
 impl MixerApp {
-    fn new(tray_receiver: Receiver<TrayEvent>) -> Self {
+    fn new(tray_receiver: Receiver<TrayEvent>, tray_available: bool) -> Self {
         let engine = Engine::start();
         let now = Instant::now();
         let mut app = Self {
@@ -58,7 +61,10 @@ impl MixerApp {
             midi_connecting: false,
             engine,
             tray_receiver,
+            tray_available,
+            window_hides: window_can_hide_here(),
             quit_requested: false,
+            closed_to_tray: false,
             status: "Looking for MIDI devices…".into(),
             stream_status: "Connecting to PipeWire…".into(),
             muted: [false; FADER_COUNT],
@@ -531,13 +537,16 @@ impl MixerApp {
         }
     }
 
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context) {
         self.tick();
         while let Ok(event) = self.tray_receiver.try_recv() {
             match event {
                 TrayEvent::Show => {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    if self.window_hides {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    }
                 }
                 TrayEvent::Quit => {
                     self.quit_requested = true;
@@ -545,17 +554,26 @@ impl MixerApp {
                 }
             }
         }
-        // Keep one native event loop alive for the lifetime of the tray process. Recreating
-        // eframe after every close can leave the windowing backend stuck or unresponsive.
         if !self.quit_requested && ctx.input(|input| input.viewport().close_requested()) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            if self.tray_available {
+                if self.window_hides {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                } else {
+                    // Wayland cannot reliably remap a hidden window. Let eframe close it and
+                    // recreate a fresh native window when the user asks to show it from the tray.
+                    self.closed_to_tray = true;
+                }
+            }
         }
         ctx.request_repaint_after(Duration::from_millis(120));
-        style(ctx);
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui) {
+        style(ui.ctx());
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(egui::Color32::from_rgb(32, 34, 36)).inner_margin(20.0))
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("MIDI Device").strong());
                     let selected = if self.config.midi_port == MIDI_DISCONNECTED { "Disconnected" } else if self.config.midi_port.is_empty() { "Automatic" } else { &self.config.midi_port };
@@ -617,9 +635,15 @@ impl MixerApp {
 struct MixerWindow(Arc<Mutex<MixerApp>>);
 
 impl eframe::App for MixerWindow {
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if let Ok(mut app) = self.0.lock() {
-            app.update(ctx, frame);
+            app.logic(ctx);
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if let Ok(mut app) = self.0.lock() {
+            app.ui(ui);
         }
     }
 }
@@ -685,7 +709,7 @@ pub(crate) fn run() -> eframe::Result<()> {
             None
         }
     };
-    let app = Arc::new(Mutex::new(MixerApp::new(tray_receiver)));
+    let app = Arc::new(Mutex::new(MixerApp::new(tray_receiver, tray_available)));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Viper Mixer")
@@ -693,6 +717,8 @@ pub(crate) fn run() -> eframe::Result<()> {
             .with_inner_size([986.0, 660.0])
             .with_min_inner_size([980.0, 620.0])
             .with_icon(icon),
+        renderer: eframe::Renderer::Wgpu,
+        wgpu_options: wgpu_options(),
         ..Default::default()
     };
     let _tray_icon = tray_icon;
@@ -701,40 +727,89 @@ pub(crate) fn run() -> eframe::Result<()> {
             "Viper Mixer",
             options,
             Box::new(move |cc| {
-                let mut style = (*cc.egui_ctx.style()).clone();
+                let mut style = (*cc.egui_ctx.style_of(egui::Theme::Dark)).clone();
                 style.spacing.item_spacing = egui::vec2(10.0, 8.0);
-                cc.egui_ctx.set_style(style);
+                cc.egui_ctx.set_style_of(egui::Theme::Dark, style);
                 Ok(Box::new(MixerWindow(app.clone())))
             }),
         );
     }
 
     loop {
-        match {
-            let app = app.lock().unwrap();
-            app.tray_receiver.recv_timeout(Duration::from_millis(120))
-        } {
-            Ok(TrayEvent::Quit) | Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
-            Ok(TrayEvent::Show) => break,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                app.lock().unwrap().tick();
+        // Keep all service discovery and tray handling alive while the native window is closed.
+        // WGPU and the windowing backend are initialized only when the user asks to show it.
+        loop {
+            // Drop the mutex guard before handling Timeout: tick() needs the same lock.
+            let event = {
+                let app = app.lock().unwrap();
+                app.tray_receiver.recv_timeout(Duration::from_millis(120))
+            };
+            match event {
+                Ok(TrayEvent::Quit) | Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+                Ok(TrayEvent::Show) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => app.lock().unwrap().tick(),
             }
         }
+
+        eframe::run_native(
+            "Viper Mixer",
+            options.clone(),
+            Box::new({
+                let app = app.clone();
+                move |cc| {
+                    let mut style = (*cc.egui_ctx.style_of(egui::Theme::Dark)).clone();
+                    style.spacing.item_spacing = egui::vec2(10.0, 8.0);
+                    cc.egui_ctx.set_style_of(egui::Theme::Dark, style);
+                    Ok(Box::new(MixerWindow(app.clone())))
+                }
+            }),
+        )?;
+
+        let mut app = app.lock().unwrap();
+        if app.quit_requested || !app.closed_to_tray {
+            return Ok(());
+        }
+        app.closed_to_tray = false;
     }
-    eframe::run_native(
-        "Viper Mixer",
-        options,
-        Box::new({
-            let app = app.clone();
-            move |cc| {
-                let mut style = (*cc.egui_ctx.style()).clone();
-                style.spacing.item_spacing = egui::vec2(10.0, 8.0);
-                cc.egui_ctx.set_style(style);
-                Ok(Box::new(MixerWindow(app.clone())))
-            }
-        }),
-    )?;
-    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn window_can_hide_here() -> bool {
+    !["WAYLAND_DISPLAY", "WAYLAND_SOCKET"]
+        .iter()
+        .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn window_can_hide_here() -> bool {
+    true
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn wgpu_options() -> eframe::WgpuConfiguration {
+    use eframe::wgpu::{DeviceType, PowerPreference};
+    let mut config = eframe::WgpuConfiguration::default();
+    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut config.wgpu_setup {
+        if let Some(preference) = PowerPreference::from_env() {
+            setup.power_preference = preference;
+        } else {
+            setup.power_preference = PowerPreference::None;
+            setup.native_adapter_selector = Some(Arc::new(|adapters, surface| {
+                adapters
+                    .iter()
+                    .filter(|adapter| surface.is_none_or(|s| adapter.is_surface_supported(s)))
+                    .min_by_key(|adapter| adapter.get_info().device_type == DeviceType::Cpu)
+                    .cloned()
+                    .ok_or_else(|| "no graphics adapter can draw to the window".to_owned())
+            }));
+        }
+    }
+    config
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn wgpu_options() -> eframe::WgpuConfiguration {
+    eframe::WgpuConfiguration::default()
 }
 
 fn create_tray(sender: Sender<TrayEvent>) -> Result<tray_icon::TrayIcon, String> {

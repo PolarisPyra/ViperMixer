@@ -15,6 +15,7 @@ fi
 "${as_root[@]}" rm -f \
     /usr/bin/viper-midi-mixer \
     /usr/share/applications/viper-midi-mixer.desktop \
+    /usr/share/icons/hicolor/256x256/apps/viper-midi-mixer.png \
     /usr/share/icons/hicolor/512x512/apps/viper-midi-mixer.png
 
 if command -v update-desktop-database >/dev/null 2>&1; then

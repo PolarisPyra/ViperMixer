@@ -3,7 +3,7 @@ mod config;
 mod engine;
 mod stream;
 
-fn main() -> eframe::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().any(|argument| argument == "--list-midi") {
         println!("MIDI inputs:");
         match midir::MidiInput::new("Viper Mixer") {
@@ -18,5 +18,10 @@ fn main() -> eframe::Result<()> {
         }
         return Ok(());
     }
-    app::run()
+    let instance = single_instance::SingleInstance::new("viper-midi-mixer")?;
+    if !instance.is_single() {
+        return Ok(());
+    }
+    app::run()?;
+    Ok(())
 }

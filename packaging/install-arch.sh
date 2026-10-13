@@ -23,10 +23,19 @@ cargo build --release --locked --manifest-path "$repo_root/Cargo.toml"
 
 "${as_root[@]}" install -Dm755 "$repo_root/target/release/viper-midi-mixer" /usr/bin/viper-midi-mixer
 "${as_root[@]}" install -Dm644 "$repo_root/packaging/viper-midi-mixer.desktop" /usr/share/applications/viper-midi-mixer.desktop
+"${as_root[@]}" install -Dm644 "$repo_root/assets/logo.png" /usr/share/icons/hicolor/256x256/apps/viper-midi-mixer.png
 "${as_root[@]}" install -Dm644 "$repo_root/assets/logo.png" /usr/share/icons/hicolor/512x512/apps/viper-midi-mixer.png
 
 if command -v update-desktop-database >/dev/null 2>&1; then
     "${as_root[@]}" update-desktop-database /usr/share/applications
 fi
 
-printf 'Viper Mixer installed. Launch it with `viper-midi-mixer` or from your application menu.\n'
+if (( EUID != 0 )); then
+    if command -v kbuildsycoca6 >/dev/null 2>&1; then
+        kbuildsycoca6 --noincremental
+    elif command -v kbuildsycoca5 >/dev/null 2>&1; then
+        kbuildsycoca5 --noincremental
+    fi
+fi
+
+printf 'Viper Mixer installed. Start it with `viper-midi-mixer`; it will appear in the system tray.\n'

@@ -1,9 +1,14 @@
 [Desktop Entry]
 Type=Application
 Name=Viper Mixer
+GenericName=MIDI Audio Mixer
 Comment=Control PipeWire audio streams with MIDI faders
 Exec=viper-midi-mixer
+TryExec=viper-midi-mixer
 Icon=viper-midi-mixer
 Terminal=false
+StartupNotify=true
 Categories=AudioVideo;Audio;Mixer;
+Keywords=viper;midi;pipewire;audio;mixer;tray;
 StartupWMClass=viper-midi-mixer
+NoDisplay=true

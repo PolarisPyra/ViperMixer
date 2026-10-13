@@ -1,5 +1,5 @@
 use crate::stream::{self, AudioStream};
-use midir::MidiInput;
+use midir::{Ignore, MidiInput, MidiInputConnection};
 use std::{
     collections::HashMap,
     process::Command,
@@ -10,6 +10,8 @@ use std::{
 pub(crate) enum EngineCommand {
     DiscoverStreams,
     DiscoverMidiPorts,
+    ConnectMidi { generation: u64, port_name: String },
+    DisconnectMidi,
     SetVolume(u64, f32),
     SetMute(u64, bool),
 }
@@ -17,18 +19,36 @@ pub(crate) enum EngineCommand {
 pub(crate) enum EngineEvent {
     Streams(Result<Vec<AudioStream>, String>),
     MidiPorts(Result<Vec<String>, String>),
+    MidiConnection {
+        generation: u64,
+        port_name: String,
+        result: Result<(), String>,
+    },
     CommandError(String),
+}
+
+enum MidiCommand {
+    Connect { generation: u64, port_name: String },
+    Disconnect,
 }
 
 pub(crate) struct Engine {
     pub sender: Sender<EngineCommand>,
     pub events: Receiver<EngineEvent>,
+    pub midi_messages: Receiver<(u64, Vec<u8>)>,
 }
 
 impl Engine {
     pub fn start() -> Self {
         let (sender, commands) = mpsc::channel();
         let (events_tx, events) = mpsc::channel();
+        let (midi_messages_tx, midi_messages) = mpsc::sync_channel(256);
+        let (midi_commands_tx, midi_commands) = mpsc::channel();
+        let midi_events = events_tx.clone();
+        thread::Builder::new()
+            .name("mixer-midi".into())
+            .spawn(move || run_midi_worker(midi_commands, midi_events, midi_messages_tx))
+            .expect("could not start MIDI worker");
         thread::Builder::new()
             .name("mixer-engine".into())
             .spawn(move || {
@@ -62,6 +82,18 @@ impl Engine {
                                     let _ = event_sender.send(EngineEvent::MidiPorts(result));
                                 });
                             }
+                            EngineCommand::ConnectMidi {
+                                generation,
+                                port_name,
+                            } => {
+                                let _ = midi_commands_tx.send(MidiCommand::Connect {
+                                    generation,
+                                    port_name,
+                                });
+                            }
+                            EngineCommand::DisconnectMidi => {
+                                let _ = midi_commands_tx.send(MidiCommand::Disconnect);
+                            }
                             EngineCommand::SetVolume(node_id, volume) => {
                                 volumes.insert(node_id, volume);
                             }
@@ -91,8 +123,76 @@ impl Engine {
                 }
             })
             .expect("could not start audio engine worker");
-        Self { sender, events }
+        Self {
+            sender,
+            events,
+            midi_messages,
+        }
     }
+}
+
+fn run_midi_worker(
+    commands: Receiver<MidiCommand>,
+    events: Sender<EngineEvent>,
+    midi_messages: mpsc::SyncSender<(u64, Vec<u8>)>,
+) {
+    let mut connection: Option<MidiInputConnection<()>> = None;
+    while let Ok(command) = commands.recv() {
+        match command {
+            MidiCommand::Disconnect => connection = None,
+            MidiCommand::Connect {
+                generation,
+                port_name,
+            } => {
+                // Opening and dropping MIDI connections can block in backend code. Keep both off
+                // the UI and PipeWire command threads.
+                connection = None;
+                let result = connect_midi(&port_name, generation, midi_messages.clone());
+                match result {
+                    Ok(opened) => {
+                        connection = Some(opened);
+                        let _ = events.send(EngineEvent::MidiConnection {
+                            generation,
+                            port_name,
+                            result: Ok(()),
+                        });
+                    }
+                    Err(error) => {
+                        let _ = events.send(EngineEvent::MidiConnection {
+                            generation,
+                            port_name,
+                            result: Err(error),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    drop(connection);
+}
+
+fn connect_midi(
+    port_name: &str,
+    generation: u64,
+    midi_messages: mpsc::SyncSender<(u64, Vec<u8>)>,
+) -> Result<MidiInputConnection<()>, String> {
+    let mut input = MidiInput::new("Viper Mixer").map_err(|error| error.to_string())?;
+    input.ignore(Ignore::None);
+    let port = input
+        .ports()
+        .into_iter()
+        .find(|port| input.port_name(port).ok().as_deref() == Some(port_name))
+        .ok_or_else(|| "MIDI device changed · retrying".to_owned())?;
+    input
+        .connect(
+            &port,
+            "viper-midi-mixer-input",
+            move |_timestamp, message, _| {
+                let _ = midi_messages.try_send((generation, message.to_vec()));
+            },
+            (),
+        )
+        .map_err(|error| error.to_string())
 }
 
 fn run_wpctl(arguments: &[&str]) -> Result<(), String> {

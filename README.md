@@ -36,7 +36,7 @@ builds an AppImage without installing system files or requiring root.
 
 ## Install on Arch Linux
 
-Install the release binary, application menu entry, and icon system-wide:
+Install the release binary, hidden desktop entry, and tray/application icons system-wide:
 
 ```sh
 ./packaging/install-arch.sh
@@ -56,6 +56,6 @@ settings in `~/.config/pipewire-mixer/` are kept when uninstalling.
 
 The window and tray icons use `assets/logo.png`.
 
-When a desktop tray is available, minimizing or closing the window hides it to
-the tray. Use **Show Viper Mixer** or **Quit** in the tray menu to control
-the app.
+When a desktop tray is available, the app starts as a tray icon without opening
+a window. Use **Show Viper Mixer** to open its window. Closing the window returns
+the app to the tray; use **Quit** in the tray menu to exit the app.

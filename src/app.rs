@@ -4,10 +4,10 @@ use crate::{
     stream::AudioStream,
 };
 use eframe::egui;
-use midir::{Ignore, MidiInput, MidiInputConnection};
 use std::{
     collections::HashSet,
     sync::mpsc::{self, Receiver, Sender},
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -15,28 +15,20 @@ const LOGO: &[u8] = include_bytes!("../assets/logo.png");
 const TRAY_SHOW: &str = "show";
 const TRAY_QUIT: &str = "quit";
 
-enum UiEvent {
-    Midi(Vec<u8>),
-}
-
 enum TrayEvent {
-    Ready,
     Show,
     Quit,
-    Failed(String),
 }
 
 struct MixerApp {
     config: Config,
     streams: Vec<AudioStream>,
     midi_ports: Vec<String>,
-    connection: Option<MidiInputConnection<()>>,
     connected_port: String,
+    midi_generation: u64,
+    midi_connecting: bool,
     engine: Engine,
-    midi_sender: Sender<UiEvent>,
-    midi_receiver: Receiver<UiEvent>,
     tray_receiver: Receiver<TrayEvent>,
-    tray_available: bool,
     quit_requested: bool,
     status: String,
     stream_status: String,
@@ -54,23 +46,18 @@ struct MixerApp {
 }
 
 impl MixerApp {
-    fn new(ctx: egui::Context) -> Self {
+    fn new(tray_receiver: Receiver<TrayEvent>) -> Self {
         let engine = Engine::start();
-        let (midi_sender, midi_receiver) = mpsc::channel();
-        let (tray_sender, tray_receiver) = mpsc::channel();
-        start_tray_thread(tray_sender, ctx);
         let now = Instant::now();
         let mut app = Self {
             config: Config::load(),
             streams: Vec::new(),
             midi_ports: Vec::new(),
-            connection: None,
             connected_port: String::new(),
+            midi_generation: 0,
+            midi_connecting: false,
             engine,
-            midi_sender,
-            midi_receiver,
             tray_receiver,
-            tray_available: false,
             quit_requested: false,
             status: "Looking for MIDI devices…".into(),
             stream_status: "Connecting to PipeWire…".into(),
@@ -120,36 +107,49 @@ impl MixerApp {
     }
 
     fn refresh_midi(&mut self) {
-        self.connection = None;
+        self.disconnect_midi();
         self.connected_port.clear();
+        self.midi_connecting = false;
         self.status = "Refreshing MIDI devices…".into();
-        self.last_connect_attempt = Instant::now() - Duration::from_secs(3);
+        self.last_connect_attempt = Instant::now();
         self.request_ports();
-        self.connect_midi();
     }
 
     fn update_ports(&mut self, mut ports: Vec<String>) {
         ports.sort_by_key(|port| port.to_lowercase());
         self.midi_ports = ports;
         if !self.connected_port.is_empty() && !self.midi_ports.contains(&self.connected_port) {
-            self.connection = None;
+            self.disconnect_midi();
             self.connected_port.clear();
+            self.midi_connecting = false;
             self.status = "MIDI device disconnected · reconnecting".into();
         }
-        if self.connection.is_none() && self.config.midi_port != MIDI_DISCONNECTED {
+        if self.connected_port.is_empty()
+            && !self.midi_connecting
+            && self.config.midi_port != MIDI_DISCONNECTED
+        {
             self.connect_midi();
         }
+    }
+
+    fn disconnect_midi(&mut self) {
+        self.midi_generation = self.midi_generation.wrapping_add(1);
+        let _ = self.engine.sender.send(EngineCommand::DisconnectMidi);
     }
 
     fn connect_midi(&mut self) {
         self.last_connect_attempt = Instant::now();
         if self.config.midi_port == MIDI_DISCONNECTED {
-            self.connection = None;
+            self.disconnect_midi();
+            self.midi_connecting = false;
             self.connected_port.clear();
             self.status = "MIDI input disconnected".into();
             return;
         }
         if !self.config.midi_port.is_empty() && !self.midi_ports.contains(&self.config.midi_port) {
+            self.disconnect_midi();
+            self.connected_port.clear();
+            self.midi_connecting = false;
             self.status = format!("{} unavailable · reconnecting", self.config.midi_port);
             return;
         }
@@ -161,44 +161,29 @@ impl MixerApp {
                 .find(|port| **port == self.config.midi_port)
         };
         let Some(port_name) = selected.cloned() else {
-            self.connection = None;
+            self.disconnect_midi();
+            self.midi_connecting = false;
             self.connected_port.clear();
             self.status = "No MIDI input found · reconnecting automatically".into();
             return;
         };
-        let mut input = match MidiInput::new("Viper Mixer") {
-            Ok(input) => input,
-            Err(error) => {
-                self.status = format!("MIDI unavailable · {error}");
-                return;
-            }
-        };
-        input.ignore(Ignore::None);
-        let Some(port) = input
-            .ports()
-            .into_iter()
-            .find(|port| input.port_name(port).ok().as_deref() == Some(port_name.as_str()))
-        else {
-            self.status = "MIDI device changed · retrying".into();
+        if self.connected_port == port_name && !self.midi_connecting {
             return;
-        };
-        let sender = self.midi_sender.clone();
-        match input.connect(
-            &port,
-            "viper-midi-mixer-input",
-            move |_timestamp, message, _| {
-                let _ = sender.send(UiEvent::Midi(message.to_vec()));
-            },
-            (),
-        ) {
-            Ok(connection) => {
-                self.connection = Some(connection);
-                self.connected_port.clone_from(&port_name);
-                self.status = format!("Connected · {port_name}");
-            }
-            Err(error) => {
-                self.status = format!("Could not connect to {port_name} · {error} · retrying")
-            }
+        }
+        self.midi_generation = self.midi_generation.wrapping_add(1);
+        self.midi_connecting = true;
+        self.status = format!("Connecting to {port_name}…");
+        if self
+            .engine
+            .sender
+            .send(EngineCommand::ConnectMidi {
+                generation: self.midi_generation,
+                port_name,
+            })
+            .is_err()
+        {
+            self.midi_connecting = false;
+            self.status = "MIDI service unavailable".into();
         }
     }
 
@@ -351,7 +336,11 @@ impl MixerApp {
                 }
                 EngineEvent::MidiPorts(Ok(ports)) => {
                     self.pending_ports = false;
-                    if ports != self.midi_ports {
+                    if ports != self.midi_ports
+                        || (self.connected_port.is_empty()
+                            && !self.midi_connecting
+                            && self.config.midi_port != MIDI_DISCONNECTED)
+                    {
                         self.update_ports(ports);
                     }
                 }
@@ -359,14 +348,37 @@ impl MixerApp {
                     self.pending_ports = false;
                     self.status = format!("MIDI unavailable · {error}");
                 }
+                EngineEvent::MidiConnection {
+                    generation,
+                    port_name,
+                    result,
+                } => {
+                    if generation == self.midi_generation {
+                        self.midi_connecting = false;
+                        match result {
+                            Ok(()) => {
+                                self.connected_port = port_name.clone();
+                                self.status = format!("Connected · {port_name}");
+                            }
+                            Err(error) => {
+                                self.connected_port.clear();
+                                self.status = format!(
+                                    "Could not connect to {port_name} · {error} · retrying"
+                                );
+                            }
+                        }
+                    }
+                }
                 EngineEvent::CommandError(error) => {
                     self.last_applied.clear();
                     self.error = Some(error);
                 }
             }
         }
-        while let Ok(UiEvent::Midi(data)) = self.midi_receiver.try_recv() {
-            self.handle_midi(&data);
+        while let Ok((generation, data)) = self.engine.midi_messages.try_recv() {
+            if generation == self.midi_generation {
+                self.handle_midi(&data);
+            }
         }
         if self.save_at.is_some_and(|time| Instant::now() >= time) {
             if let Err(error) = self.config.save() {
@@ -501,14 +513,29 @@ impl MixerApp {
     }
 }
 
-impl eframe::App for MixerApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+impl MixerApp {
+    fn tick(&mut self) {
         self.process_events();
+        if Instant::now().duration_since(self.last_stream_request) > Duration::from_secs(2) {
+            self.request_streams();
+        }
+        if Instant::now().duration_since(self.last_ports_request) > Duration::from_secs(3) {
+            self.request_ports();
+        }
+        if self.connected_port.is_empty()
+            && !self.midi_connecting
+            && self.config.midi_port != MIDI_DISCONNECTED
+            && Instant::now().duration_since(self.last_connect_attempt) >= Duration::from_secs(2)
+        {
+            self.connect_midi();
+        }
+    }
+
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.tick();
         while let Ok(event) = self.tray_receiver.try_recv() {
             match event {
-                TrayEvent::Ready => self.tray_available = true,
                 TrayEvent::Show => {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 }
@@ -516,32 +543,13 @@ impl eframe::App for MixerApp {
                     self.quit_requested = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
-                TrayEvent::Failed(error) => {
-                    self.tray_available = false;
-                    self.error = Some(format!("System tray unavailable: {error}"));
-                }
             }
         }
-        if self.tray_available && ctx.input(|input| input.viewport().minimized.unwrap_or(false)) {
+        // Keep one native event loop alive for the lifetime of the tray process. Recreating
+        // eframe after every close can leave the windowing backend stuck or unresponsive.
+        if !self.quit_requested && ctx.input(|input| input.viewport().close_requested()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-        }
-        if ctx.input(|input| input.viewport().close_requested()) {
-            if self.tray_available && !self.quit_requested {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-            }
-        }
-        if Instant::now().duration_since(self.last_stream_request) > Duration::from_secs(2) {
-            self.request_streams();
-        }
-        if Instant::now().duration_since(self.last_ports_request) > Duration::from_secs(3) {
-            self.request_ports();
-        }
-        if self.connection.is_none()
-            && self.config.midi_port != MIDI_DISCONNECTED
-            && Instant::now().duration_since(self.last_connect_attempt) >= Duration::from_secs(2)
-        {
-            self.connect_midi();
         }
         ctx.request_repaint_after(Duration::from_millis(120));
         style(ctx);
@@ -560,19 +568,20 @@ impl eframe::App for MixerApp {
                         });
                     });
                     if desired_port != self.config.midi_port {
+                        self.disconnect_midi();
                         self.config.midi_port = desired_port;
-                        self.connection = None;
                         self.connected_port.clear();
+                        self.midi_connecting = false;
                         self.connect_midi();
                         self.schedule_save();
                     }
                     if ui.button("Refresh").clicked() { self.refresh_midi(); }
-                    let midi_status = if self.connection.is_some() {
+                    let midi_status = if !self.connected_port.is_empty() {
                         format!("Connected: {}", self.connected_port)
                     } else {
                         self.status.clone()
                     };
-                    ui.colored_label(if self.connection.is_some() { egui::Color32::from_rgb(55, 190, 112) } else { egui::Color32::from_rgb(213, 159, 76) }, midi_status);
+                    ui.colored_label(if !self.connected_port.is_empty() { egui::Color32::from_rgb(55, 190, 112) } else { egui::Color32::from_rgb(213, 159, 76) }, midi_status);
                 });
             ui.add_space(14.0);
             ui.heading("Assign Applications to Faders");
@@ -602,6 +611,16 @@ impl eframe::App for MixerApp {
                 ui.colored_label(egui::Color32::from_rgb(255, 130, 145), error);
             }
         });
+    }
+}
+
+struct MixerWindow(Arc<Mutex<MixerApp>>);
+
+impl eframe::App for MixerWindow {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        if let Ok(mut app) = self.0.lock() {
+            app.update(ctx, frame);
+        }
     }
 }
 
@@ -656,6 +675,17 @@ pub(crate) fn run() -> eframe::Result<()> {
         width,
         height,
     };
+    let (tray_sender, tray_receiver) = mpsc::channel();
+    let tray_icon = create_tray(tray_sender);
+    let tray_available = tray_icon.is_ok();
+    let tray_icon = match tray_icon {
+        Ok(icon) => Some(icon),
+        Err(error) => {
+            eprintln!("System tray unavailable: {error}");
+            None
+        }
+    };
+    let app = Arc::new(Mutex::new(MixerApp::new(tray_receiver)));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Viper Mixer")
@@ -665,84 +695,82 @@ pub(crate) fn run() -> eframe::Result<()> {
             .with_icon(icon),
         ..Default::default()
     };
+    let _tray_icon = tray_icon;
+    if !tray_available {
+        return eframe::run_native(
+            "Viper Mixer",
+            options,
+            Box::new(move |cc| {
+                let mut style = (*cc.egui_ctx.style()).clone();
+                style.spacing.item_spacing = egui::vec2(10.0, 8.0);
+                cc.egui_ctx.set_style(style);
+                Ok(Box::new(MixerWindow(app.clone())))
+            }),
+        );
+    }
+
+    loop {
+        match {
+            let app = app.lock().unwrap();
+            app.tray_receiver.recv_timeout(Duration::from_millis(120))
+        } {
+            Ok(TrayEvent::Quit) | Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+            Ok(TrayEvent::Show) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                app.lock().unwrap().tick();
+            }
+        }
+    }
     eframe::run_native(
         "Viper Mixer",
         options,
-        Box::new(move |cc| {
-            let mut style = (*cc.egui_ctx.style()).clone();
-            style.spacing.item_spacing = egui::vec2(10.0, 8.0);
-            cc.egui_ctx.set_style(style);
-            Ok(Box::new(MixerApp::new(cc.egui_ctx.clone())))
+        Box::new({
+            let app = app.clone();
+            move |cc| {
+                let mut style = (*cc.egui_ctx.style()).clone();
+                style.spacing.item_spacing = egui::vec2(10.0, 8.0);
+                cc.egui_ctx.set_style(style);
+                Ok(Box::new(MixerWindow(app.clone())))
+            }
         }),
-    )
+    )?;
+    Ok(())
 }
 
-fn start_tray_thread(sender: Sender<TrayEvent>, repaint_ctx: egui::Context) {
-    std::thread::Builder::new()
-        .name("mixer-system-tray".into())
-        .spawn(move || {
-            if let Err(error) = gtk::init() {
-                let _ = sender.send(TrayEvent::Failed(error.to_string()));
-                return;
-            }
-            let tray_handle = std::rc::Rc::new(std::cell::RefCell::new(None));
-            let handle_for_init = tray_handle.clone();
-            let sender_for_init = sender.clone();
-            gtk::glib::idle_add_local_once(move || {
-                use tray_icon::{
-                    menu::{Menu, MenuEvent, MenuItem},
-                    Icon, TrayIconBuilder,
-                };
+fn create_tray(sender: Sender<TrayEvent>) -> Result<tray_icon::TrayIcon, String> {
+    use tray_icon::{
+        menu::{Menu, MenuEvent, MenuItem},
+        Icon, TrayIconBuilder,
+    };
 
-                let menu = Menu::new();
-                let show_item = MenuItem::with_id(TRAY_SHOW, "Show Viper Mixer", true, None);
-                let quit_item = MenuItem::with_id(TRAY_QUIT, "Quit", true, None);
-                if let Err(error) = menu.append_items(&[&show_item, &quit_item]) {
-                    let _ = sender_for_init.send(TrayEvent::Failed(error.to_string()));
-                    return;
-                }
-                let show_id = show_item.id().clone();
-                let quit_id = quit_item.id().clone();
-                let sender_for_events = sender_for_init.clone();
-                let repaint_ctx = repaint_ctx.clone();
-                MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
-                    if event.id == show_id {
-                        let _ = sender_for_events.send(TrayEvent::Show);
-                    } else if event.id == quit_id {
-                        let _ = sender_for_events.send(TrayEvent::Quit);
-                    }
-                    repaint_ctx.request_repaint();
-                }));
+    let menu = Menu::new();
+    let show_item = MenuItem::with_id(TRAY_SHOW, "Show Viper Mixer", true, None);
+    let quit_item = MenuItem::with_id(TRAY_QUIT, "Quit", true, None);
+    menu.append_items(&[&show_item, &quit_item])
+        .map_err(|error| error.to_string())?;
 
-                let decoded = image::load_from_memory(LOGO).expect("bundled logo must be valid");
-                let image = decoded.thumbnail(96, 96).into_rgba8();
-                let (width, height) = image.dimensions();
-                let icon = match Icon::from_rgba(image.into_raw(), width, height) {
-                    Ok(icon) => icon,
-                    Err(error) => {
-                        let _ = sender_for_init.send(TrayEvent::Failed(error.to_string()));
-                        return;
-                    }
-                };
-                match TrayIconBuilder::new()
-                    .with_menu(Box::new(menu))
-                    .with_tooltip("Viper Mixer")
-                    .with_icon(icon)
-                    .build()
-                {
-                    Ok(tray) => {
-                        *handle_for_init.borrow_mut() = Some(tray);
-                        let _ = sender_for_init.send(TrayEvent::Ready);
-                    }
-                    Err(error) => {
-                        let _ = sender_for_init.send(TrayEvent::Failed(error.to_string()));
-                    }
-                }
-            });
-            gtk::main();
-            drop(tray_handle);
-        })
-        .expect("could not start GTK tray event thread");
+    let show_id = show_item.id().clone();
+    let quit_id = quit_item.id().clone();
+    MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+        if event.id == show_id {
+            let _ = sender.send(TrayEvent::Show);
+        } else if event.id == quit_id {
+            let _ = sender.send(TrayEvent::Quit);
+        }
+    }));
+
+    let decoded = image::load_from_memory(LOGO).expect("bundled logo must be valid");
+    let image = decoded.thumbnail(96, 96).into_rgba8();
+    let (width, height) = image.dimensions();
+    let icon =
+        Icon::from_rgba(image.into_raw(), width, height).map_err(|error| error.to_string())?;
+
+    TrayIconBuilder::new()
+        .with_menu(Box::new(menu))
+        .with_tooltip("Viper Mixer")
+        .with_icon(icon)
+        .build()
+        .map_err(|error| error.to_string())
 }
 
 impl Drop for MixerApp {

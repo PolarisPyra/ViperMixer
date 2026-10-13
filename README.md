@@ -36,7 +36,7 @@ builds an AppImage without installing system files or requiring root.
 
 ## Install on Arch Linux
 
-Install the release binary, hidden desktop entry, and tray/application icons system-wide:
+Install the release binary, searchable desktop entry, and tray/application icons system-wide:
 
 ```sh
 ./packaging/install-arch.sh

@@ -11,4 +11,3 @@ StartupNotify=true
 Categories=AudioVideo;Audio;Mixer;
 Keywords=viper;midi;pipewire;audio;mixer;tray;
 StartupWMClass=viper-midi-mixer
-NoDisplay=true

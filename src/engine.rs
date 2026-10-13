@@ -50,7 +50,7 @@ impl Engine {
                             EngineCommand::DiscoverMidiPorts => {
                                 let event_sender = events_tx.clone();
                                 thread::spawn(move || {
-                                    let result = MidiInput::new("Viper Midi Mixer")
+                                    let result = MidiInput::new("Viper Mixer")
                                         .map(|input| {
                                             input
                                                 .ports()

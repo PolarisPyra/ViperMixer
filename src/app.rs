@@ -166,7 +166,7 @@ impl MixerApp {
             self.status = "No MIDI input found · reconnecting automatically".into();
             return;
         };
-        let mut input = match MidiInput::new("Viper Midi Mixer") {
+        let mut input = match MidiInput::new("Viper Mixer") {
             Ok(input) => input,
             Err(error) => {
                 self.status = format!("MIDI unavailable · {error}");
@@ -528,7 +528,7 @@ impl eframe::App for MixerApp {
         if ctx.input(|input| input.viewport().close_requested()) {
             if self.tray_available && !self.quit_requested {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
             }
         }
         if Instant::now().duration_since(self.last_stream_request) > Duration::from_secs(2) {
@@ -658,7 +658,7 @@ pub(crate) fn run() -> eframe::Result<()> {
     };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Viper Midi Mixer")
+            .with_title("Viper Mixer")
             .with_app_id("viper-midi-mixer")
             .with_inner_size([986.0, 660.0])
             .with_min_inner_size([980.0, 620.0])
@@ -666,7 +666,7 @@ pub(crate) fn run() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "Viper Midi Mixer",
+        "Viper Mixer",
         options,
         Box::new(move |cc| {
             let mut style = (*cc.egui_ctx.style()).clone();
@@ -695,7 +695,7 @@ fn start_tray_thread(sender: Sender<TrayEvent>, repaint_ctx: egui::Context) {
                 };
 
                 let menu = Menu::new();
-                let show_item = MenuItem::with_id(TRAY_SHOW, "Show Viper Midi Mixer", true, None);
+                let show_item = MenuItem::with_id(TRAY_SHOW, "Show Viper Mixer", true, None);
                 let quit_item = MenuItem::with_id(TRAY_QUIT, "Quit", true, None);
                 if let Err(error) = menu.append_items(&[&show_item, &quit_item]) {
                     let _ = sender_for_init.send(TrayEvent::Failed(error.to_string()));
@@ -726,7 +726,7 @@ fn start_tray_thread(sender: Sender<TrayEvent>, repaint_ctx: egui::Context) {
                 };
                 match TrayIconBuilder::new()
                     .with_menu(Box::new(menu))
-                    .with_tooltip("Viper Midi Mixer")
+                    .with_tooltip("Viper Mixer")
                     .with_icon(icon)
                     .build()
                 {

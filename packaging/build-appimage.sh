@@ -12,7 +12,7 @@ tools_dir="${XDG_CACHE_HOME:-$HOME/.cache}/viper-midi-mixer/appimage-tools"
 linuxdeploy="$tools_dir/linuxdeploy-x86_64.AppImage"
 appimage_dir="$repo_root/target/appimage"
 appdir="$appimage_dir/AppDir"
-output="$appimage_dir/Viper-Midi-Mixer-x86_64.AppImage"
+output="$appimage_dir/Viper-Mixer-x86_64.AppImage"
 version=$(awk -F '"' '/^version = / { print $2; exit }' "$repo_root/Cargo.toml")
 
 for tool in cargo curl; do

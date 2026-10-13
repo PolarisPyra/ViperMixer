@@ -29,4 +29,4 @@ if command -v update-desktop-database >/dev/null 2>&1; then
     "${as_root[@]}" update-desktop-database /usr/share/applications
 fi
 
-printf 'Viper Midi Mixer installed. Launch it with `viper-midi-mixer` or from your application menu.\n'
+printf 'Viper Mixer installed. Launch it with `viper-midi-mixer` or from your application menu.\n'

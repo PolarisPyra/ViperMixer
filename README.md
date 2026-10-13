@@ -1,4 +1,4 @@
-# Viper Midi Mixer
+# Viper Mixer
 
 A native Rust and egui mixer for MIDI hardware faders on Linux. Assign five MIDI
 faders to PipeWire audio applications, map mute notes, and keep assignments
@@ -57,5 +57,5 @@ settings in `~/.config/pipewire-mixer/` are kept when uninstalling.
 The window and tray icons use `assets/logo.png`.
 
 When a desktop tray is available, minimizing or closing the window hides it to
-the tray. Use **Show Viper Midi Mixer** or **Quit** in the tray menu to control
+the tray. Use **Show Viper Mixer** or **Quit** in the tray menu to control
 the app.

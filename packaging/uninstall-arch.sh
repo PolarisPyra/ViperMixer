@@ -25,4 +25,4 @@ if (( EUID != 0 )) && command -v kbuildsycoca6 >/dev/null 2>&1; then
     kbuildsycoca6 --noincremental
 fi
 
-printf 'Viper Midi Mixer was removed. Settings were left untouched.\n'
+printf 'Viper Mixer was removed. Settings were left untouched.\n'

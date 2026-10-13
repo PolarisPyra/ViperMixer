@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Viper Midi Mixer
+Name=Viper Mixer
 Comment=Control PipeWire audio streams with MIDI faders
 Exec=viper-midi-mixer
 Icon=viper-midi-mixer

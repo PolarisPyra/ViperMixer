@@ -655,6 +655,10 @@ impl eframe::App for MixerWindow {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        static FIRST_UI: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+        if FIRST_UI.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            crate::startup_trace("first UI frame");
+        }
         if let Ok(mut app) = self.0.lock() {
             app.ui(ui);
         }
@@ -704,7 +708,9 @@ fn dark_combo<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui) -> 
 }
 
 pub(crate) fn run() -> eframe::Result<()> {
+    crate::startup_trace("app startup entered");
     let decoded_logo = image::load_from_memory(LOGO).expect("logo.png must be a valid image");
+    crate::startup_trace("window icon decoded");
     let icon_image = decoded_logo.thumbnail(256, 256).into_rgba8();
     let (width, height) = icon_image.dimensions();
     let icon = egui::IconData {
@@ -713,7 +719,8 @@ pub(crate) fn run() -> eframe::Result<()> {
         height,
     };
     let (tray_sender, tray_receiver) = mpsc::channel();
-    let tray_icon = create_tray(tray_sender);
+    let tray_icon = create_tray(&decoded_logo, tray_sender);
+    crate::startup_trace("tray creation returned");
     let tray_available = tray_icon.is_ok();
     let tray_icon = match tray_icon {
         Ok(icon) => Some(icon),
@@ -723,6 +730,7 @@ pub(crate) fn run() -> eframe::Result<()> {
         }
     };
     let app = Arc::new(Mutex::new(MixerApp::new(tray_receiver, tray_available)));
+    crate::startup_trace("configuration and engine initialized");
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Viper Mixer")
@@ -730,16 +738,22 @@ pub(crate) fn run() -> eframe::Result<()> {
             .with_inner_size([986.0, 660.0])
             .with_min_inner_size([980.0, 620.0])
             .with_icon(icon),
-        renderer: eframe::Renderer::Wgpu,
-        wgpu_options: wgpu_options(),
+        renderer: eframe::Renderer::Glow,
         ..Default::default()
     };
     let _tray_icon = tray_icon;
-    if !tray_available {
+    let show_window_on_startup = !tray_available || !app.lock().unwrap().window_hides;
+    crate::startup_trace(if show_window_on_startup {
+        "starting with a visible window"
+    } else {
+        "starting minimized to tray"
+    });
+    if show_window_on_startup {
         return eframe::run_native(
             "Viper Mixer",
             options,
             Box::new(move |cc| {
+                crate::startup_trace("eframe app factory called");
                 let mut style = (*cc.egui_ctx.style_of(egui::Theme::Dark)).clone();
                 style.spacing.item_spacing = egui::vec2(10.0, 8.0);
                 cc.egui_ctx.set_style_of(egui::Theme::Dark, style);
@@ -750,7 +764,7 @@ pub(crate) fn run() -> eframe::Result<()> {
 
     loop {
         // Keep all service discovery and tray handling alive while the native window is closed.
-        // WGPU and the windowing backend are initialized only when the user asks to show it.
+        // The graphics renderer and windowing backend are initialized only when the user asks to show it.
         loop {
             // Drop the mutex guard before handling Timeout: tick() needs the same lock.
             let event = {
@@ -773,6 +787,7 @@ pub(crate) fn run() -> eframe::Result<()> {
             Box::new({
                 let app = app.clone();
                 move |cc| {
+                    crate::startup_trace("eframe app factory called");
                     let mut style = (*cc.egui_ctx.style_of(egui::Theme::Dark)).clone();
                     style.spacing.item_spacing = egui::vec2(10.0, 8.0);
                     cc.egui_ctx.set_style_of(egui::Theme::Dark, style);
@@ -801,34 +816,10 @@ fn window_can_hide_here() -> bool {
     true
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
-fn wgpu_options() -> eframe::WgpuConfiguration {
-    use eframe::wgpu::{DeviceType, PowerPreference};
-    let mut config = eframe::WgpuConfiguration::default();
-    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut config.wgpu_setup {
-        if let Some(preference) = PowerPreference::from_env() {
-            setup.power_preference = preference;
-        } else {
-            setup.power_preference = PowerPreference::None;
-            setup.native_adapter_selector = Some(Arc::new(|adapters, surface| {
-                adapters
-                    .iter()
-                    .filter(|adapter| surface.is_none_or(|s| adapter.is_surface_supported(s)))
-                    .min_by_key(|adapter| adapter.get_info().device_type == DeviceType::Cpu)
-                    .cloned()
-                    .ok_or_else(|| "no graphics adapter can draw to the window".to_owned())
-            }));
-        }
-    }
-    config
-}
-
-#[cfg(any(windows, target_os = "macos"))]
-fn wgpu_options() -> eframe::WgpuConfiguration {
-    eframe::WgpuConfiguration::default()
-}
-
-fn create_tray(sender: Sender<TrayEvent>) -> Result<tray_icon::TrayIcon, String> {
+fn create_tray(
+    decoded_logo: &image::DynamicImage,
+    sender: Sender<TrayEvent>,
+) -> Result<tray_icon::TrayIcon, String> {
     use tray_icon::{
         menu::{Menu, MenuEvent, MenuItem},
         Icon, TrayIconBuilder,
@@ -850,11 +841,10 @@ fn create_tray(sender: Sender<TrayEvent>) -> Result<tray_icon::TrayIcon, String>
         }
     }));
 
-    let decoded = image::load_from_memory(LOGO).expect("bundled logo must be valid");
-    let image = decoded.thumbnail(96, 96).into_rgba8();
-    let (width, height) = image.dimensions();
+    let icon_image = decoded_logo.thumbnail(96, 96).into_rgba8();
+    let (width, height) = icon_image.dimensions();
     let icon =
-        Icon::from_rgba(image.into_raw(), width, height).map_err(|error| error.to_string())?;
+        Icon::from_rgba(icon_image.into_raw(), width, height).map_err(|error| error.to_string())?;
 
     TrayIconBuilder::new()
         .with_menu(Box::new(menu))

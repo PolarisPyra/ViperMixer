@@ -14,6 +14,7 @@ pub(crate) enum EngineCommand {
     DisconnectMidi,
     SetVolume(u64, f32),
     SetMute(u64, bool),
+    Shutdown,
 }
 
 pub(crate) enum EngineEvent {
@@ -100,6 +101,13 @@ impl Engine {
                             EngineCommand::SetMute(node_id, muted) => {
                                 mutes.insert(node_id, muted);
                             }
+                            EngineCommand::Shutdown => {
+                                // Flush pending commands and break
+                                let _ = midi_commands_tx.send(MidiCommand::Disconnect);
+                                drop(events_tx);
+                                drop(midi_commands_tx);
+                                return;
+                            }
                         }
                     }
                     for (node_id, volume) in volumes {
@@ -128,6 +136,10 @@ impl Engine {
             events,
             midi_messages,
         }
+    }
+
+    pub fn shutdown(&self) {
+        let _ = self.sender.send(EngineCommand::Shutdown);
     }
 }
 

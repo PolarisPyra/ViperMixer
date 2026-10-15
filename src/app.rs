@@ -32,6 +32,7 @@ struct MixerApp {
     tray_available: bool,
     window_hides: bool,
     quit_requested: bool,
+    shutdown_requested: bool,
     closed_to_tray: bool,
     status: String,
     stream_status: String,
@@ -65,6 +66,7 @@ impl MixerApp {
             window_hides: window_can_hide_here(),
             quit_requested: false,
             closed_to_tray: false,
+            shutdown_requested: false,
             status: "Looking for MIDI devices…".into(),
             stream_status: "Connecting to PipeWire…".into(),
             muted: [false; FADER_COUNT],
@@ -79,6 +81,7 @@ impl MixerApp {
             last_applied: Vec::new(),
             error: None,
         };
+        // Don't block on startup - defer connection attempts to the tick loop
         app.request_streams();
         app.request_ports();
         app
@@ -549,6 +552,7 @@ impl MixerApp {
                     }
                 }
                 TrayEvent::Quit => {
+                    self.shutdown_requested = true;
                     self.quit_requested = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
@@ -564,7 +568,16 @@ impl MixerApp {
                     // recreate a fresh native window when the user asks to show it from the tray.
                     self.closed_to_tray = true;
                 }
+            } else {
+                // No tray available - actually quit
+                self.shutdown_requested = true;
+                self.quit_requested = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
+        }
+        if self.shutdown_requested {
+            self.quit_requested = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         ctx.request_repaint_after(Duration::from_millis(120));
     }
@@ -742,6 +755,9 @@ pub(crate) fn run() -> eframe::Result<()> {
             // Drop the mutex guard before handling Timeout: tick() needs the same lock.
             let event = {
                 let app = app.lock().unwrap();
+                if app.shutdown_requested {
+                    return Ok(());
+                }
                 app.tray_receiver.recv_timeout(Duration::from_millis(120))
             };
             match event {
@@ -766,7 +782,7 @@ pub(crate) fn run() -> eframe::Result<()> {
         )?;
 
         let mut app = app.lock().unwrap();
-        if app.quit_requested || !app.closed_to_tray {
+        if app.quit_requested || app.shutdown_requested || !app.closed_to_tray {
             return Ok(());
         }
         app.closed_to_tray = false;
@@ -850,6 +866,8 @@ fn create_tray(sender: Sender<TrayEvent>) -> Result<tray_icon::TrayIcon, String>
 
 impl Drop for MixerApp {
     fn drop(&mut self) {
+        // Signal engine to shutdown
+        self.engine.shutdown();
         if let Err(error) = self.config.save() {
             eprintln!("Could not save mixer settings during shutdown: {error}");
         }

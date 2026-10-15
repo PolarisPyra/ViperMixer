@@ -559,7 +559,7 @@ impl MixerApp {
             }
         }
         if !self.quit_requested && ctx.input(|input| input.viewport().close_requested()) {
-            if self.tray_available {
+            if self.tray_available && self.config.close_to_tray {
                 if self.window_hides {
                     ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
@@ -569,7 +569,7 @@ impl MixerApp {
                     self.closed_to_tray = true;
                 }
             } else {
-                // No tray available - actually quit
+                // The tray is unavailable or close-to-tray is disabled.
                 self.shutdown_requested = true;
                 self.quit_requested = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -613,6 +613,20 @@ impl MixerApp {
                         self.status.clone()
                     };
                     ui.colored_label(if !self.connected_port.is_empty() { egui::Color32::from_rgb(55, 190, 112) } else { egui::Color32::from_rgb(213, 159, 76) }, midi_status);
+                });
+                ui.horizontal(|ui| {
+                    let mut close_to_tray = self.config.close_to_tray;
+                    let response = ui.add_enabled(
+                        self.tray_available,
+                        egui::Checkbox::new(&mut close_to_tray, "Close to system tray"),
+                    );
+                    if response.changed() {
+                        self.config.close_to_tray = close_to_tray;
+                        self.schedule_save();
+                    }
+                    if !self.tray_available {
+                        ui.label("System tray unavailable; closing exits Viper Mixer");
+                    }
                 });
             ui.add_space(14.0);
             ui.heading("Assign Applications to Faders");
@@ -748,36 +762,26 @@ pub(crate) fn run() -> eframe::Result<()> {
     } else {
         "starting minimized to tray"
     });
-    if show_window_on_startup {
-        return eframe::run_native(
-            "Viper Mixer",
-            options,
-            Box::new(move |cc| {
-                crate::startup_trace("eframe app factory called");
-                let mut style = (*cc.egui_ctx.style_of(egui::Theme::Dark)).clone();
-                style.spacing.item_spacing = egui::vec2(10.0, 8.0);
-                cc.egui_ctx.set_style_of(egui::Theme::Dark, style);
-                Ok(Box::new(MixerWindow(app.clone())))
-            }),
-        );
-    }
-
+    let mut show_window = show_window_on_startup;
     loop {
-        // Keep all service discovery and tray handling alive while the native window is closed.
-        // The graphics renderer and windowing backend are initialized only when the user asks to show it.
-        loop {
-            // Drop the mutex guard before handling Timeout: tick() needs the same lock.
-            let event = {
-                let app = app.lock().unwrap();
-                if app.shutdown_requested {
-                    return Ok(());
+        if !show_window {
+            // Keep service discovery and tray handling alive while the native window is closed.
+            loop {
+                // Drop the mutex guard before handling Timeout: tick() needs the same lock.
+                let event = {
+                    let app = app.lock().unwrap();
+                    if app.shutdown_requested {
+                        return Ok(());
+                    }
+                    app.tray_receiver.recv_timeout(Duration::from_millis(120))
+                };
+                match event {
+                    Ok(TrayEvent::Quit) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        return Ok(())
+                    }
+                    Ok(TrayEvent::Show) => break,
+                    Err(mpsc::RecvTimeoutError::Timeout) => app.lock().unwrap().tick(),
                 }
-                app.tray_receiver.recv_timeout(Duration::from_millis(120))
-            };
-            match event {
-                Ok(TrayEvent::Quit) | Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
-                Ok(TrayEvent::Show) => break,
-                Err(mpsc::RecvTimeoutError::Timeout) => app.lock().unwrap().tick(),
             }
         }
 
@@ -801,6 +805,7 @@ pub(crate) fn run() -> eframe::Result<()> {
             return Ok(());
         }
         app.closed_to_tray = false;
+        show_window = false;
     }
 }
 

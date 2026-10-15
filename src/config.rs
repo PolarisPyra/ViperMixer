@@ -12,6 +12,7 @@ pub(crate) struct Config {
     pub midi_port: String,
     pub mute_notes: Vec<Option<u8>>,
     pub fader_volumes: Vec<f32>,
+    pub close_to_tray: bool,
 }
 
 impl Default for Config {
@@ -22,6 +23,7 @@ impl Default for Config {
             midi_port: String::new(),
             mute_notes: default_mute_notes(),
             fader_volumes: default_volumes(),
+            close_to_tray: true,
         }
     }
 }
@@ -49,12 +51,17 @@ impl Config {
             .or_else(|| object.get("mute_ccs"));
         let mute_notes = fixed_notes(notes_value);
         let fader_volumes = fixed_volumes(object.get("fader_volumes"));
+        let close_to_tray = object
+            .get("close_to_tray")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
         let mut config = Self {
             applications,
             stream_keys,
             midi_port,
             mute_notes,
             fader_volumes,
+            close_to_tray,
         };
         config.normalize();
         config

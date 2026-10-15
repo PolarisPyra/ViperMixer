@@ -58,5 +58,6 @@ uses `sudo` when needed; you can also run it as root.
 The window and tray icons use `assets/logo.png`.
 
 When a desktop tray is available, the app starts as a tray icon without opening
-a window. Use **Show Viper Mixer** to open its window. Closing the window returns
-the app to the tray; use **Quit** in the tray menu to exit the app.
+a window. Use **Show Viper Mixer** to open its window. **Close to system tray**
+controls whether closing the window keeps the app running in the tray. Use
+**Quit** in the tray menu to exit the app.

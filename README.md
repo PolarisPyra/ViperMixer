@@ -39,11 +39,12 @@ builds an AppImage without installing system files or requiring root.
 Install the release binary, searchable desktop entry, and tray/application icons system-wide:
 
 ```sh
-./packaging/install-arch.sh
+./packaging/packenger.sh install
 ```
 
-Remove those files later with `./packaging/uninstall-arch.sh`. Your mixer
-settings in `~/.config/pipewire-mixer/` are kept when uninstalling.
+Remove those files later with `./packaging/packenger.sh uninstall`. Your mixer
+settings in `~/.config/pipewire-mixer/` are kept when uninstalling. The script
+uses `sudo` when needed; you can also run it as root.
 
 ## MIDI controls
 

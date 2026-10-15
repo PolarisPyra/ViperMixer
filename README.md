@@ -43,7 +43,7 @@ Install the release binary, searchable desktop entry, and tray/application icons
 ```
 
 Remove those files later with `./packaging/packenger.sh uninstall`. Your mixer
-settings in `~/.config/pipewire-mixer/` are kept when uninstalling. The script
+settings in `~/.config/viper-mixer/` are kept when uninstalling. The script
 uses `sudo` when needed; you can also run it as root.
 
 ## MIDI controls
@@ -53,7 +53,7 @@ uses `sudo` when needed; you can also run it as root.
 - Choose a MIDI device from the input menu, or use **Automatic** to connect to
   the first available input. **Disconnected** stops MIDI control until you
   choose another option.
-- App assignments are saved in `~/.config/pipewire-mixer/config.json`.
+- App assignments are saved in `~/.config/viper-mixer/config.json`.
 
 The window and tray icons use `assets/logo.png`.
 

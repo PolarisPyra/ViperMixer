@@ -32,8 +32,8 @@ impl Config {
     pub fn load() -> Self {
         let value = Self::path()
             .ok()
-            .and_then(|path| fs::read(path).ok())
-            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+            .and_then(read_value)
+            .or_else(|| Self::legacy_path().ok().and_then(read_value));
         let Some(object) = value.as_ref().and_then(serde_json::Value::as_object) else {
             return Self::default();
         };
@@ -83,6 +83,12 @@ impl Config {
     fn path() -> io::Result<PathBuf> {
         let home = std::env::var_os("HOME")
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME is not set"))?;
+        Ok(PathBuf::from(home).join(".config/viper-mixer/config.json"))
+    }
+
+    fn legacy_path() -> io::Result<PathBuf> {
+        let home = std::env::var_os("HOME")
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME is not set"))?;
         Ok(PathBuf::from(home).join(".config/pipewire-mixer/config.json"))
     }
 
@@ -105,6 +111,12 @@ impl Config {
             };
         });
     }
+}
+
+fn read_value(path: PathBuf) -> Option<serde_json::Value> {
+    fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
 }
 
 fn default_applications() -> Vec<String> {

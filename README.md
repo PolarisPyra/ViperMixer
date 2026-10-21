@@ -27,24 +27,26 @@ List MIDI inputs from the command line with `cargo run --release -- --list-midi`
 Build a distributable AppImage for x86_64 Linux:
 
 ```sh
-./packaging/build-appimage.sh
+scripts/build.sh appimage
 ```
 
-The output is written to `target/appimage/`. The first run downloads linuxdeploy
-into `~/.cache/viper-midi-mixer/appimage-tools/`; later runs reuse it. This
-builds an AppImage without installing system files or requiring root.
+The output is `target/appimage/Viper-Mixer-x86_64.AppImage`, under the same name for every
+version. The first run downloads linuxdeploy into `~/.cache/viper-midi-mixer/appimage-tools/`;
+later runs reuse it. This builds an AppImage without installing system files or requiring root.
 
-## Install on Arch Linux
+## Install locally
 
-Install the release binary, searchable desktop entry, and tray/application icons system-wide:
+Install the release binary, its icon, and a searchable launcher for your user:
 
 ```sh
-./packaging/packenger.sh install
+scripts/build.sh install
 ```
 
-Remove those files later with `./packaging/packenger.sh uninstall`. Your mixer
-settings in `~/.config/viper-mixer/` are kept when uninstalling. The script
-uses `sudo` when needed; you can also run it as root.
+The files go under `~/.local` (`bin/viper-midi-mixer`, the hicolor icon, and
+`share/applications/viper-midi-mixer.desktop`). Set `PREFIX` to install somewhere else. The
+script reports whether the launcher is new, up to date, or stale and rewritten, and refreshes the
+desktop, icon, and KDE caches so the menu picks it up. Your mixer settings in
+`~/.config/viper-mixer/` are not touched.
 
 ## MIDI controls
 
@@ -73,22 +75,16 @@ commit subjects with a leading verb, for example `Add ...`, `Fix ...`, or `Chang
 The tag sets the app version, so you never bump `Cargo.toml` by hand. The version in the repo
 stays at `0.2.0` as a placeholder, which means a local build reports that version.
 
-To cut a release:
+To cut a release, run the script from a clean `main` that is up to date with `origin/main`:
 
-1. Preview the notes for the new version. Nothing is written:
-   ```sh
-   git cliff --unreleased --tag v0.3.0
-   ```
-2. Regenerate the changelog with a full rewrite:
-   ```sh
-   git cliff --tag v0.3.0 -o CHANGELOG.md
-   ```
-3. Commit the changelog, tag, and push:
-   ```sh
-   git commit -am "Release v0.3.0"
-   git tag v0.3.0
-   git push origin main v0.3.0
-   ```
+```sh
+scripts/release.sh 0.3.0
+```
+
+The script checks the version and the repo state, runs Clippy, and prints the release notes for
+the new version. After you confirm, it regenerates `CHANGELOG.md` with a full rewrite, commits it
+as `Release v0.3.0`, creates the annotated tag, and pushes `main` and the tag. Nothing is written
+until you confirm.
 
 Pushing the tag runs `.github/workflows/release-appimage.yml`. It builds the AppImage,
 attaches it to a GitHub release named after the tag, and uses git-cliff for the release notes.

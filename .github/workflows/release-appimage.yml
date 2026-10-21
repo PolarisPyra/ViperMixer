@@ -1,0 +1,83 @@
+name: Release AppImage
+
+# Builds the Linux AppImage when a version tag (v0.1.0, v0.2.0, ...) is pushed,
+# and attaches it to a GitHub release for that tag. Pushes to main don't build.
+# Run it by hand from the Actions tab to build without a tag.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  appimage:
+    # Build on the oldest Ubuntu runner still available so the AppImage links
+    # against an older glibc and runs on newer distributions too.
+    runs-on: ubuntu-22.04
+    env:
+      # linuxdeploy is itself an AppImage; this lets it run without FUSE.
+      APPIMAGE_EXTRACT_AND_RUN: 1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # git-cliff needs the full history and tags to build release notes.
+          fetch-depth: 0
+
+      - name: Install Viper Mixer dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            file \
+            libasound2-dev \
+            libfuse2 \
+            pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Set version from tag
+        # The tag is the source of truth. Local builds keep the placeholder version in Cargo.toml.
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          sed -i "0,/^version = /{s/^version = .*/version = \"$version\"/}" Cargo.toml
+          # Refresh Cargo.lock so the --locked build in build-appimage.sh still passes.
+          cargo metadata --format-version 1 > /dev/null
+
+      - name: Build AppImage
+        run: ./packaging/build-appimage.sh
+
+      - name: Find AppImage
+        id: find
+        run: |
+          path=$(ls target/appimage/*.AppImage | head -n 1)
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: viper-mixer-appimage
+          path: ${{ steps.find.outputs.path }}
+
+      - name: Generate release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+          output: release-notes.md
+
+      - name: Attach to GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "${{ steps.find.outputs.path }}" \
+            --title "Viper Mixer $GITHUB_REF_NAME" \
+            --notes-file release-notes.md

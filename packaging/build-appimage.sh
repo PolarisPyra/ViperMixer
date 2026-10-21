@@ -32,6 +32,9 @@ fi
 
 cargo build --release --locked --manifest-path "$repo_root/Cargo.toml"
 rm -rf "$appdir"
+# linuxdeploy matches the desktop file's Icon= name against the icon file name.
+icon="$appimage_dir/viper-midi-mixer.png"
+cp "$repo_root/assets/logo.png" "$icon"
 
 cd "$appimage_dir"
 LDAI_OUTPUT="$output" \
@@ -40,6 +43,6 @@ APPIMAGE_EXTRACT_AND_RUN=1 "$linuxdeploy" \
     --appdir "$appdir" \
     --executable "$repo_root/target/release/viper-midi-mixer" \
     --desktop-file "$repo_root/packaging/viper-midi-mixer.desktop" \
-    --icon-file "$repo_root/assets/logo.png" \
+    --icon-file "$icon" \
     --output appimage
 printf 'Built %s\n' "$output"

@@ -1,6 +1,6 @@
 [package]
 name = "viper-midi-mixer"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 description = "A MIDI fader controller for PipeWire by Viper"
 

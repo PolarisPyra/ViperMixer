@@ -10,27 +10,11 @@ pub(crate) struct AudioStream {
     pub binary: String,
     pub description: String,
     pub process_id: Option<u32>,
+    pub identity: String,
+    pub is_steam_game: bool,
 }
 
 impl AudioStream {
-    pub fn identity(&self) -> String {
-        if !self.app_id.is_empty() {
-            format!(
-                "stream-id:{}:{}:{}",
-                self.app_id.to_lowercase(),
-                self.app_name.to_lowercase(),
-                self.binary.to_lowercase()
-            )
-        } else {
-            format!(
-                "stream-app:{}:{}:{}",
-                self.app_name.to_lowercase(),
-                self.binary.to_lowercase(),
-                self.description.to_lowercase()
-            )
-        }
-    }
-
     pub fn detail(&self) -> String {
         [
             self.app_name.as_str(),
@@ -42,25 +26,43 @@ impl AudioStream {
         .collect::<Vec<_>>()
         .join(" • ")
     }
+}
 
-    pub fn is_steam_game(&self) -> bool {
-        if self.app_name.to_ascii_lowercase().starts_with("steam_app_") {
-            return true;
-        }
-        let Some(pid) = self.process_id else {
-            return false;
-        };
-        fs::read(format!("/proc/{pid}/environ"))
-            .ok()
-            .is_some_and(|environment| {
-                environment.split(|byte| *byte == 0).any(|field| {
-                    field
-                        .strip_prefix(b"SteamAppId=")
-                        .or_else(|| field.strip_prefix(b"SteamGameId="))
-                        .is_some_and(|value| !value.is_empty())
-                })
-            })
+fn identity(app_id: &str, app_name: &str, binary: &str, description: &str) -> String {
+    if !app_id.is_empty() {
+        format!(
+            "stream-id:{}:{}:{}",
+            app_id.to_lowercase(),
+            app_name.to_lowercase(),
+            binary.to_lowercase()
+        )
+    } else {
+        format!(
+            "stream-app:{}:{}:{}",
+            app_name.to_lowercase(),
+            binary.to_lowercase(),
+            description.to_lowercase()
+        )
     }
+}
+
+fn is_steam_game(app_name: &str, process_id: Option<u32>) -> bool {
+    if app_name.to_ascii_lowercase().starts_with("steam_app_") {
+        return true;
+    }
+    let Some(pid) = process_id else {
+        return false;
+    };
+    fs::read(format!("/proc/{pid}/environ"))
+        .ok()
+        .is_some_and(|environment| {
+            environment.split(|byte| *byte == 0).any(|field| {
+                field
+                    .strip_prefix(b"SteamAppId=")
+                    .or_else(|| field.strip_prefix(b"SteamGameId="))
+                    .is_some_and(|value| !value.is_empty())
+            })
+        })
 }
 
 #[derive(Debug, Error)]
@@ -139,6 +141,8 @@ pub(crate) fn parse(data: &[serde_json::Value]) -> Result<Vec<AudioStream>, Stre
                     .and_then(|value| value.parse().ok())
             })
             .and_then(|value| u32::try_from(value).ok());
+        let identity = identity(&app_id, &app_name, &binary, &description);
+        let is_steam_game = is_steam_game(&app_name, process_id);
         streams.push(AudioStream {
             node_id,
             name,
@@ -147,6 +151,8 @@ pub(crate) fn parse(data: &[serde_json::Value]) -> Result<Vec<AudioStream>, Stre
             binary,
             description,
             process_id,
+            identity,
+            is_steam_game,
         });
     }
     streams.sort_by(|left, right| {

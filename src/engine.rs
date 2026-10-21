@@ -58,6 +58,7 @@ impl Engine {
                     batch.extend(commands.try_iter());
                     let mut volumes = HashMap::new();
                     let mut mutes = HashMap::new();
+                    let mut shutdown = false;
                     for command in batch {
                         match command {
                             EngineCommand::DiscoverStreams => {
@@ -102,11 +103,8 @@ impl Engine {
                                 mutes.insert(node_id, muted);
                             }
                             EngineCommand::Shutdown => {
-                                // Flush pending commands and break
-                                let _ = midi_commands_tx.send(MidiCommand::Disconnect);
-                                drop(events_tx);
-                                drop(midi_commands_tx);
-                                return;
+                                shutdown = true;
+                                break;
                             }
                         }
                     }
@@ -127,6 +125,11 @@ impl Engine {
                         ]) {
                             let _ = events_tx.send(EngineEvent::CommandError(error));
                         }
+                    }
+                    if shutdown {
+                        // Pending volume and mute changes above are flushed before exiting.
+                        let _ = midi_commands_tx.send(MidiCommand::Disconnect);
+                        return;
                     }
                 }
             })

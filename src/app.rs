@@ -14,6 +14,9 @@ use std::{
 const LOGO: &[u8] = include_bytes!("../assets/logo.png");
 const TRAY_SHOW: &str = "show";
 const TRAY_QUIT: &str = "quit";
+const GREEN: egui::Color32 = egui::Color32::from_rgb(55, 190, 112);
+const AMBER: egui::Color32 = egui::Color32::from_rgb(213, 159, 76);
+const ERROR: egui::Color32 = egui::Color32::from_rgb(255, 130, 145);
 
 enum TrayEvent {
     Show,
@@ -197,36 +200,48 @@ impl MixerApp {
     }
 
     fn assigned_stream(&self, index: usize) -> Option<&AudioStream> {
-        let identity = &self.config.stream_keys[index];
-        if !identity.is_empty() {
-            if let Some(stream) = self
-                .streams
-                .iter()
-                .find(|stream| stream.identity() == *identity)
-            {
-                return Some(stream);
-            }
-        }
-        let name = &self.config.applications[index];
-        if name.is_empty() || name == STEAM_ALL {
+        if self.config.applications[index] == STEAM_ALL {
             return None;
         }
-        self.streams.iter().find(|stream| stream.name == *name)
+        self.assigned_streams(index).into_iter().next()
+    }
+
+    // An app can own several PipeWire nodes (for example, one per browser tab), and they all
+    // share an identity, so the fader drives every matching node.
+    fn assigned_streams(&self, index: usize) -> Vec<&AudioStream> {
+        let selected = &self.config.applications[index];
+        if selected == STEAM_ALL {
+            return self
+                .streams
+                .iter()
+                .filter(|stream| stream.is_steam_game)
+                .collect();
+        }
+        let identity = &self.config.stream_keys[index];
+        if !identity.is_empty() {
+            let matches: Vec<_> = self
+                .streams
+                .iter()
+                .filter(|stream| stream.identity == *identity)
+                .collect();
+            if !matches.is_empty() {
+                return matches;
+            }
+        }
+        if selected.is_empty() {
+            return Vec::new();
+        }
+        self.streams
+            .iter()
+            .filter(|stream| stream.name == *selected)
+            .collect()
     }
 
     fn assigned_ids(&self, index: usize) -> Vec<u64> {
-        let selected = &self.config.applications[index];
-        if selected == STEAM_ALL {
-            self.streams
-                .iter()
-                .filter(|stream| stream.is_steam_game())
-                .map(|stream| stream.node_id)
-                .collect()
-        } else {
-            self.assigned_stream(index)
-                .map(|stream| vec![stream.node_id])
-                .unwrap_or_default()
-        }
+        self.assigned_streams(index)
+            .iter()
+            .map(|stream| stream.node_id)
+            .collect()
     }
 
     fn apply(&mut self, index: usize) {
@@ -314,7 +329,7 @@ impl MixerApp {
                             self.streams
                                 .iter()
                                 .find(|previous| previous.node_id == next.node_id)
-                                .is_some_and(|previous| previous.identity() != next.identity())
+                                .is_some_and(|previous| previous.identity != next.identity)
                         })
                         .map(|stream| stream.node_id)
                         .collect::<HashSet<_>>();
@@ -324,8 +339,10 @@ impl MixerApp {
                     self.streams = streams;
                     let mut assignments_changed = false;
                     for index in 0..FADER_COUNT {
-                        if let Some(stream) = self.assigned_stream(index) {
-                            let identity = stream.identity();
+                        if let Some(identity) = self
+                            .assigned_stream(index)
+                            .map(|stream| stream.identity.clone())
+                        {
                             if self.config.stream_keys[index] != identity {
                                 self.config.stream_keys[index] = identity;
                                 assignments_changed = true;
@@ -343,8 +360,9 @@ impl MixerApp {
                     self.pending_streams = false;
                     self.stream_status = format!("PipeWire unavailable · {error}");
                 }
-                EngineEvent::MidiPorts(Ok(ports)) => {
+                EngineEvent::MidiPorts(Ok(mut ports)) => {
                     self.pending_ports = false;
+                    ports.sort_by_key(|port| port.to_lowercase());
                     if ports != self.midi_ports
                         || (self.connected_port.is_empty()
                             && !self.midi_connecting
@@ -449,9 +467,12 @@ impl MixerApp {
                             "Steam Games (All)",
                         );
                         for stream in &self.streams {
-                            let identity = stream.identity();
-                            ui.selectable_value(&mut selected, identity, stream.name.clone())
-                                .on_hover_text(stream.detail());
+                            ui.selectable_value(
+                                &mut selected,
+                                stream.identity.clone(),
+                                stream.name.clone(),
+                            )
+                            .on_hover_text(stream.detail());
                         }
                         if !saved_name.is_empty() && saved_name != STEAM_ALL && !has_assigned_stream
                         {
@@ -465,6 +486,7 @@ impl MixerApp {
             });
             ui.add_space(4.0);
             if selected != current {
+                let previous_ids = self.assigned_ids(index);
                 if selected.is_empty() {
                     self.config.applications[index].clear();
                     self.config.stream_keys[index].clear();
@@ -474,10 +496,17 @@ impl MixerApp {
                 } else if let Some(stream) = self
                     .streams
                     .iter()
-                    .find(|stream| stream.identity() == selected)
+                    .find(|stream| stream.identity == selected)
                 {
                     self.config.applications[index] = stream.name.clone();
                     self.config.stream_keys[index] = selected;
+                }
+                // Reassigning must not leave the previous app muted with no fader controlling it.
+                if self.mute_touched[index] && self.muted[index] {
+                    let next_ids = self.assigned_ids(index);
+                    for id in previous_ids.into_iter().filter(|id| !next_ids.contains(id)) {
+                        let _ = self.engine.sender.send(EngineCommand::SetMute(id, false));
+                    }
                 }
                 self.last_applied.clear();
                 self.apply(index);
@@ -525,6 +554,12 @@ impl MixerApp {
 impl MixerApp {
     fn tick(&mut self) {
         self.process_events();
+        // A wedged pw-dump never sends a reply, so stop waiting for it after a while.
+        if self.pending_streams
+            && Instant::now().duration_since(self.last_stream_request) > Duration::from_secs(10)
+        {
+            self.pending_streams = false;
+        }
         if Instant::now().duration_since(self.last_stream_request) > Duration::from_secs(2) {
             self.request_streams();
         }
@@ -585,18 +620,35 @@ impl MixerApp {
     fn ui(&mut self, ui: &mut egui::Ui) {
         style(ui.ctx());
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(egui::Color32::from_rgb(32, 34, 36)).inner_margin(20.0))
+            .frame(
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(32, 34, 36))
+                    .inner_margin(20.0),
+            )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("MIDI Device").strong());
-                    let selected = if self.config.midi_port == MIDI_DISCONNECTED { "Disconnected" } else if self.config.midi_port.is_empty() { "Automatic" } else { &self.config.midi_port };
+                    let selected = match self.config.midi_port.as_str() {
+                        MIDI_DISCONNECTED => "Disconnected",
+                        "" => "Automatic",
+                        port => port,
+                    };
                     let mut desired_port = self.config.midi_port.clone();
                     dark_combo(ui, |ui| {
-                        egui::ComboBox::from_id_salt("midi-device").width(360.0).selected_text(selected).show_ui(ui, |ui| {
-                            ui.selectable_value(&mut desired_port, String::new(), "Automatic");
-                            ui.selectable_value(&mut desired_port, MIDI_DISCONNECTED.to_owned(), "Disconnected");
-                            for port in &self.midi_ports { ui.selectable_value(&mut desired_port, port.clone(), port); }
-                        });
+                        egui::ComboBox::from_id_salt("midi-device")
+                            .width(360.0)
+                            .selected_text(selected)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut desired_port, String::new(), "Automatic");
+                                ui.selectable_value(
+                                    &mut desired_port,
+                                    MIDI_DISCONNECTED.to_owned(),
+                                    "Disconnected",
+                                );
+                                for port in &self.midi_ports {
+                                    ui.selectable_value(&mut desired_port, port.clone(), port);
+                                }
+                            });
                     });
                     if desired_port != self.config.midi_port {
                         self.disconnect_midi();
@@ -606,13 +658,15 @@ impl MixerApp {
                         self.connect_midi();
                         self.schedule_save();
                     }
-                    if ui.button("Refresh").clicked() { self.refresh_midi(); }
-                    let midi_status = if !self.connected_port.is_empty() {
-                        format!("Connected: {}", self.connected_port)
+                    if ui.button("Refresh").clicked() {
+                        self.refresh_midi();
+                    }
+                    let (midi_status, status_color) = if self.connected_port.is_empty() {
+                        (self.status.clone(), AMBER)
                     } else {
-                        self.status.clone()
+                        (format!("Connected: {}", self.connected_port), GREEN)
                     };
-                    ui.colored_label(if !self.connected_port.is_empty() { egui::Color32::from_rgb(55, 190, 112) } else { egui::Color32::from_rgb(213, 159, 76) }, midi_status);
+                    ui.colored_label(status_color, midi_status);
                 });
                 ui.horizontal(|ui| {
                     let mut close_to_tray = self.config.close_to_tray;
@@ -628,34 +682,53 @@ impl MixerApp {
                         ui.label("System tray unavailable; closing exits Viper Mixer");
                     }
                 });
-            ui.add_space(14.0);
-            ui.heading("Assign Applications to Faders");
-            ui.add_space(4.0);
-            ui.label(egui::RichText::new("Choose the PipeWire application controlled by each MIDI fader. Choose Steam Games (All) to control every Steam game audio stream. Faders 1–5 map to MIDI CC 1–5. Latched hardware mute buttons sync mute states directly based on switch state.").size(12.0).color(ui.visuals().weak_text_color()));
-            ui.add_space(12.0);
-            egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
-                for index in 0..FADER_COUNT {
-                    self.show_fader(ui, index);
-                    ui.add_space(4.0);
+                ui.add_space(14.0);
+                ui.heading("Assign Applications to Faders");
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(
+                        "Choose the PipeWire application controlled by each MIDI fader. \
+                         Choose Steam Games (All) to control every Steam game audio stream. \
+                         Faders 1–5 map to MIDI CC 1–5. Latched hardware mute buttons sync \
+                         mute states directly based on switch state.",
+                    )
+                    .size(12.0)
+                    .color(ui.visuals().weak_text_color()),
+                );
+                ui.add_space(12.0);
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        for index in 0..FADER_COUNT {
+                            self.show_fader(ui, index);
+                            ui.add_space(4.0);
+                        }
+                    });
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(&self.stream_status)
+                            .size(12.0)
+                            .color(ui.visuals().weak_text_color()),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Save").clicked() {
+                            match self.config.save() {
+                                Ok(()) => self.stream_status = "Configuration saved".into(),
+                                Err(error) => {
+                                    self.error = Some(format!("Could not save settings: {error}"))
+                                }
+                            }
+                        }
+                        if ui.button("Refresh Applications").clicked() {
+                            self.request_streams();
+                        }
+                    });
+                });
+                if let Some(error) = &self.error {
+                    ui.add_space(8.0);
+                    ui.colored_label(ERROR, error);
                 }
             });
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(&self.stream_status).size(12.0).color(ui.visuals().weak_text_color()));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Save").clicked() {
-                        match self.config.save() {
-                            Ok(()) => self.stream_status = "Configuration saved".into(),
-                            Err(error) => self.error = Some(format!("Could not save settings: {error}")),
-                        }
-                    }
-                    if ui.button("Refresh Applications").clicked() { self.request_streams(); }
-                });
-            });
-            if let Some(error) = &self.error {
-                ui.add_space(8.0);
-                ui.colored_label(egui::Color32::from_rgb(255, 130, 145), error);
-            }
-        });
     }
 }
 

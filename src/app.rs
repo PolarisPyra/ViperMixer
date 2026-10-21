@@ -1,7 +1,7 @@
 use crate::{
     config::{Config, FADER_COUNT, MIDI_DISCONNECTED, STEAM_ALL},
     engine::{Engine, EngineCommand, EngineEvent},
-    stream::AudioStream,
+    stream::{self, AudioStream},
 };
 use eframe::egui;
 use std::{
@@ -33,7 +33,8 @@ struct MixerApp {
     engine: Engine,
     tray_receiver: Receiver<TrayEvent>,
     tray_available: bool,
-    window_hides: bool,
+    // Set when Show closes the window so the run loop opens a fresh one in front.
+    reopen: bool,
     quit_requested: bool,
     shutdown_requested: bool,
     closed_to_tray: bool,
@@ -66,7 +67,7 @@ impl MixerApp {
             engine,
             tray_receiver,
             tray_available,
-            window_hides: window_can_hide_here(),
+            reopen: false,
             quit_requested: false,
             closed_to_tray: false,
             shutdown_requested: false,
@@ -231,9 +232,11 @@ impl MixerApp {
         if selected.is_empty() {
             return Vec::new();
         }
+        // Assignments saved before ALSA names were shortened still match their program.
+        let selected = stream::strip_alsa_wrapper(selected);
         self.streams
             .iter()
-            .filter(|stream| stream.name == *selected)
+            .filter(|stream| stream.name == selected)
             .collect()
     }
 
@@ -339,12 +342,15 @@ impl MixerApp {
                     self.streams = streams;
                     let mut assignments_changed = false;
                     for index in 0..FADER_COUNT {
-                        if let Some(identity) = self
+                        if let Some((identity, name)) = self
                             .assigned_stream(index)
-                            .map(|stream| stream.identity.clone())
+                            .map(|stream| (stream.identity.clone(), stream.name.clone()))
                         {
-                            if self.config.stream_keys[index] != identity {
+                            if self.config.stream_keys[index] != identity
+                                || self.config.applications[index] != name
+                            {
                                 self.config.stream_keys[index] = identity;
+                                self.config.applications[index] = name;
                                 assignments_changed = true;
                             }
                         }
@@ -579,11 +585,12 @@ impl MixerApp {
         self.tick();
         while let Ok(event) = self.tray_receiver.try_recv() {
             match event {
+                // Wayland ignores unminimize and focus requests, so bring the window forward by
+                // recreating it.
                 TrayEvent::Show => {
-                    if self.window_hides {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    if !ctx.input(|input| input.viewport().focused.unwrap_or(false)) {
+                        self.reopen = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 }
                 TrayEvent::Quit => {
@@ -593,16 +600,14 @@ impl MixerApp {
                 }
             }
         }
-        if !self.quit_requested && ctx.input(|input| input.viewport().close_requested()) {
+        if !self.quit_requested
+            && !self.reopen
+            && ctx.input(|input| input.viewport().close_requested())
+        {
             if self.tray_available && self.config.close_to_tray {
-                if self.window_hides {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                } else {
-                    // Wayland cannot reliably remap a hidden window. Let eframe close it and
-                    // recreate a fresh native window when the user asks to show it from the tray.
-                    self.closed_to_tray = true;
-                }
+                // Wayland cannot remap a hidden window. Let eframe close it and recreate a fresh
+                // native window when the user asks to show it from the tray.
+                self.closed_to_tray = true;
             } else {
                 // The tray is unavailable or close-to-tray is disabled.
                 self.shutdown_requested = true;
@@ -829,13 +834,7 @@ pub(crate) fn run() -> eframe::Result<()> {
         ..Default::default()
     };
     let _tray_icon = tray_icon;
-    let show_window_on_startup = !tray_available || !app.lock().unwrap().window_hides;
-    crate::startup_trace(if show_window_on_startup {
-        "starting with a visible window"
-    } else {
-        "starting minimized to tray"
-    });
-    let mut show_window = show_window_on_startup;
+    let mut show_window = true;
     loop {
         if !show_window {
             // Keep service discovery and tray handling alive while the native window is closed.
@@ -874,24 +873,16 @@ pub(crate) fn run() -> eframe::Result<()> {
         )?;
 
         let mut app = app.lock().unwrap();
+        if app.reopen {
+            app.reopen = false;
+            continue;
+        }
         if app.quit_requested || app.shutdown_requested || !app.closed_to_tray {
             return Ok(());
         }
         app.closed_to_tray = false;
         show_window = false;
     }
-}
-
-#[cfg(target_os = "linux")]
-fn window_can_hide_here() -> bool {
-    !["WAYLAND_DISPLAY", "WAYLAND_SOCKET"]
-        .iter()
-        .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
-}
-
-#[cfg(not(target_os = "linux"))]
-fn window_can_hide_here() -> bool {
-    true
 }
 
 fn create_tray(

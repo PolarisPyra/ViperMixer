@@ -1,4 +1,8 @@
-use std::{collections::HashSet, fs, process::Command};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    process::Command,
+};
 use thiserror::Error;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -26,6 +30,13 @@ impl AudioStream {
         .collect::<Vec<_>>()
         .join(" • ")
     }
+}
+
+/// The ALSA plugin names every client "PipeWire ALSA [<program>]"; keep just the program.
+pub(crate) fn strip_alsa_wrapper(name: &str) -> &str {
+    name.strip_prefix("PipeWire ALSA [")
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or(name)
 }
 
 fn identity(app_id: &str, app_name: &str, binary: &str, description: &str) -> String {
@@ -89,6 +100,15 @@ pub(crate) fn discover() -> Result<Vec<AudioStream>, StreamError> {
 pub(crate) fn parse(data: &[serde_json::Value]) -> Result<Vec<AudioStream>, StreamError> {
     let mut seen = HashSet::with_capacity(data.len());
     let mut streams = Vec::new();
+    // ALSA-plugin streams only carry the process binary and PID on their owning client.
+    let clients: HashMap<u64, &serde_json::Value> = data
+        .iter()
+        .filter(|item| {
+            item.get("type").and_then(serde_json::Value::as_str)
+                == Some("PipeWire:Interface:Client")
+        })
+        .filter_map(|item| Some((item.get("id")?.as_u64()?, &item["info"]["props"])))
+        .collect();
     for item in data {
         if item.get("type").and_then(serde_json::Value::as_str) != Some("PipeWire:Interface:Node") {
             continue;
@@ -100,20 +120,25 @@ pub(crate) fn parse(data: &[serde_json::Value]) -> Result<Vec<AudioStream>, Stre
         if props["media.class"].as_str() != Some("Stream/Output/Audio") || !seen.insert(node_id) {
             continue;
         }
-        let app_name = props["application.name"]
-            .as_str()
-            .unwrap_or_default()
-            .trim()
-            .to_owned();
+        let client_props = props["client.id"]
+            .as_u64()
+            .and_then(|id| clients.get(&id).copied())
+            .unwrap_or(&serde_json::Value::Null);
+        let prop = |key: &str| {
+            props[key]
+                .as_str()
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| client_props[key].as_str())
+                .unwrap_or_default()
+                .trim()
+        };
+        let app_name = strip_alsa_wrapper(prop("application.name")).to_owned();
         let app_id = props["application.id"]
             .as_str()
             .unwrap_or_default()
             .trim()
             .to_owned();
-        let binary_path = props["application.process.binary"]
-            .as_str()
-            .unwrap_or_default()
-            .trim();
+        let binary_path = prop("application.process.binary");
         let binary = binary_path
             .rsplit('/')
             .next()
@@ -133,12 +158,14 @@ pub(crate) fn parse(data: &[serde_json::Value]) -> Result<Vec<AudioStream>, Stre
         } else {
             format!("Audio stream {node_id}")
         };
-        let process_id = props["application.process.id"]
-            .as_u64()
-            .or_else(|| {
-                props["application.process.id"]
-                    .as_str()
-                    .and_then(|value| value.parse().ok())
+        let process_id = [props, client_props]
+            .into_iter()
+            .find_map(|props| {
+                props["application.process.id"].as_u64().or_else(|| {
+                    props["application.process.id"]
+                        .as_str()
+                        .and_then(|value| value.parse().ok())
+                })
             })
             .and_then(|value| u32::try_from(value).ok());
         let identity = identity(&app_id, &app_name, &binary, &description);

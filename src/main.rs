@@ -2,6 +2,7 @@ mod app;
 mod config;
 mod engine;
 mod stream;
+mod tray;
 
 pub(crate) fn startup_trace(stage: &str) {
     use std::sync::OnceLock;

@@ -2,26 +2,20 @@ use crate::{
     config::{Config, FADER_COUNT, MIDI_DISCONNECTED, STEAM_ALL},
     engine::{Engine, EngineCommand, EngineEvent},
     stream::{self, AudioStream},
+    tray::{self, TrayEvent},
 };
 use eframe::egui;
 use std::{
     collections::HashSet,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::mpsc::{self, Receiver},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
 const LOGO: &[u8] = include_bytes!("../assets/logo.png");
-const TRAY_SHOW: &str = "show";
-const TRAY_QUIT: &str = "quit";
 const GREEN: egui::Color32 = egui::Color32::from_rgb(55, 190, 112);
 const AMBER: egui::Color32 = egui::Color32::from_rgb(213, 159, 76);
 const ERROR: egui::Color32 = egui::Color32::from_rgb(255, 130, 145);
-
-enum TrayEvent {
-    Show,
-    Quit,
-}
 
 struct MixerApp {
     config: Config,
@@ -811,7 +805,7 @@ pub(crate) fn run() -> eframe::Result<()> {
         height,
     };
     let (tray_sender, tray_receiver) = mpsc::channel();
-    let tray_icon = create_tray(&decoded_logo, tray_sender);
+    let tray_icon = tray::create(&decoded_logo, tray_sender);
     crate::startup_trace("tray creation returned");
     let tray_available = tray_icon.is_ok();
     let tray_icon = match tray_icon {
@@ -883,44 +877,6 @@ pub(crate) fn run() -> eframe::Result<()> {
         app.closed_to_tray = false;
         show_window = false;
     }
-}
-
-fn create_tray(
-    decoded_logo: &image::DynamicImage,
-    sender: Sender<TrayEvent>,
-) -> Result<tray_icon::TrayIcon, String> {
-    use tray_icon::{
-        menu::{Menu, MenuEvent, MenuItem},
-        Icon, TrayIconBuilder,
-    };
-
-    let menu = Menu::new();
-    let show_item = MenuItem::with_id(TRAY_SHOW, "Show Viper Mixer", true, None);
-    let quit_item = MenuItem::with_id(TRAY_QUIT, "Quit", true, None);
-    menu.append_items(&[&show_item, &quit_item])
-        .map_err(|error| error.to_string())?;
-
-    let show_id = show_item.id().clone();
-    let quit_id = quit_item.id().clone();
-    MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
-        if event.id == show_id {
-            let _ = sender.send(TrayEvent::Show);
-        } else if event.id == quit_id {
-            let _ = sender.send(TrayEvent::Quit);
-        }
-    }));
-
-    let icon_image = decoded_logo.thumbnail(96, 96).into_rgba8();
-    let (width, height) = icon_image.dimensions();
-    let icon =
-        Icon::from_rgba(icon_image.into_raw(), width, height).map_err(|error| error.to_string())?;
-
-    TrayIconBuilder::new()
-        .with_menu(Box::new(menu))
-        .with_tooltip("Viper Mixer")
-        .with_icon(icon)
-        .build()
-        .map_err(|error| error.to_string())
 }
 
 impl Drop for MixerApp {

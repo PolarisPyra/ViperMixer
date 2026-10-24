@@ -66,7 +66,8 @@ jobs:
         # scripts/release.sh already wrote the tag's version into the repo; this makes a tag pushed
         # without the script build with its own version too.
         if: startsWith(github.ref, 'refs/tags/v')
-        run: scripts/set-version.sh "${GITHUB_REF_NAME#v}"
+        run: |
+          scripts/set-version.sh "${GITHUB_REF_NAME#v}"
           # Refresh Cargo.lock so the --locked build in scripts/build.sh still passes.
           cargo metadata --format-version 1 > /dev/null
 

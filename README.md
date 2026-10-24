@@ -1,3 +1,5 @@
+<a href="https://github.com/PolarisPyra/ViperMixer/releases/latest"><img align="right" src="https://img.shields.io/github/v/release/PolarisPyra/ViperMixer?label=version" alt="Latest version"></a>
+
 # Viper Mixer
 
 A native Rust and egui mixer for MIDI hardware faders on Linux. Assign five MIDI
@@ -60,7 +62,8 @@ desktop, icon, and KDE caches so the menu picks it up. Your mixer settings in
 The window and tray icons use `assets/logo.png`.
 
 When a desktop tray is available, closing the window keeps the app running in
-the tray. Use **Show Viper Mixer** to reopen or bring forward its window.
+the tray. Use **Show Viper Mixer**, or launch the app again from the application menu, to reopen or bring
+forward its window.
 **Close to system tray** controls whether closing the window keeps the app
 running in the tray. Use **Quit** in the tray menu to exit the app.
 
@@ -72,19 +75,42 @@ a group by the start of its subject line, and commits that start with `Release`,
 `Merge`, or `Chore` are left out. Words that don't match a group go under **Other**, so write
 commit subjects with a leading verb, for example `Add ...`, `Fix ...`, or `Change ...`.
 
-The tag sets the app version, so you never bump `Cargo.toml` by hand. The version in the repo
-stays at `0.2.0` as a placeholder, which means a local build reports that version.
+The release script sets the version, so you never edit it in `Cargo.toml` by hand. The version
+in the repo always matches the latest tag.
 
-To cut a release, run the script from a clean `main` that is up to date with `origin/main`:
+### Version numbers
+
+Versions are `MAJOR.MINOR.PATCH` with no leading zeros and no suffixes. Read the current version
+with `git describe --tags --abbrev=0`, then raise one part by one:
+
+- **Patch** for fixes and small changes: `0.5.1` → `0.5.2`.
+- **Minor** for larger features, resetting the patch: `0.5.1` → `0.6.0`.
+- **Major** only for a deliberate major release.
+
+Hotfixes are ordinary patch releases: a hotfix after `0.5.9` is `0.5.10`, not `0.5.91`. Each
+part is compared as a whole number, so `0.5.91` would sort above every release from `0.5.10` to
+`0.5.90` and break release ordering.
+
+### Cutting a release
+
+Run the script from a clean `main` that is up to date with `origin/main`:
 
 ```sh
 scripts/release.sh 0.3.0
 ```
 
 The script checks the version and the repo state, runs Clippy, and prints the release notes for
-the new version. After you confirm, it regenerates `CHANGELOG.md` with a full rewrite, commits it
-as `Release v0.3.0`, creates the annotated tag, and pushes `main` and the tag. Nothing is written
-until you confirm.
+the new version. After you confirm, it writes the version into `Cargo.toml` with
+`scripts/set-version.sh`, updates `Cargo.lock`, regenerates `CHANGELOG.md` with a full rewrite,
+commits them as `Release v0.3.0`, creates the annotated tag, and pushes `main` and the tag.
+Nothing is written until you confirm.
 
-Pushing the tag runs `.github/workflows/release-appimage.yml`. It builds the AppImage,
-attaches it to a GitHub release named after the tag, and uses git-cliff for the release notes.
+Pushing the tag runs `.github/workflows/release-appimage.yml`. It runs `scripts/set-version.sh`
+with the tag's version, so a tag pushed without the script still builds with its own version.
+It then builds the AppImage, attaches it to a GitHub release named after the tag, and uses
+git-cliff for the release notes. To check the build without a release, run the workflow by hand
+from the Actions tab (**Run workflow**).
+
+Don't edit `CHANGELOG.md` by hand. Tags must start with `v` followed by a digit, such as
+`v0.3.0`. Never reuse, move, or delete a pushed tag; a broken release is followed by the next
+patch release.

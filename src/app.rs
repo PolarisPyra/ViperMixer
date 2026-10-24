@@ -1,6 +1,7 @@
 use crate::{
     config::{Config, FADER_COUNT, MIDI_DISCONNECTED, STEAM_ALL},
     engine::{Engine, EngineCommand, EngineEvent},
+    instance,
     stream::{self, AudioStream},
     tray::{self, TrayEvent},
 };
@@ -805,7 +806,11 @@ pub(crate) fn run() -> eframe::Result<()> {
         height,
     };
     let (tray_sender, tray_receiver) = mpsc::channel();
-    let tray_icon = tray::create(&decoded_logo, tray_sender);
+    let tray_icon = tray::create(&decoded_logo, tray_sender.clone());
+    // Launching Viper Mixer again, such as from the app menu, shows the running window.
+    instance::listen(move || {
+        let _ = tray_sender.send(TrayEvent::Show);
+    });
     crate::startup_trace("tray creation returned");
     let tray_available = tray_icon.is_ok();
     let tray_icon = match tray_icon {

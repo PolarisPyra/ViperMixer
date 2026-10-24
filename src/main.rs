@@ -1,6 +1,7 @@
 mod app;
 mod config;
 mod engine;
+mod instance;
 mod stream;
 mod tray;
 
@@ -39,6 +40,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let instance = single_instance::SingleInstance::new("viper-midi-mixer")?;
     startup_trace("single-instance lock acquired");
     if !instance.is_single() {
+        if let Err(error) = instance::show_running() {
+            eprintln!("Viper Mixer is already running but did not respond: {error}");
+        }
         return Ok(());
     }
     startup_trace("entering app startup");

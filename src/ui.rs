@@ -29,7 +29,10 @@ const MUTE_CELL_H: f32 = 92.0;
 const LEVEL_H: f32 = 26.0;
 /// The fader's height before the first layout measures it.
 const FADER_GUESS: f32 = 260.0;
-/// The largest a strip grows, so a big window doesn't stretch the console: past these the
+/// The window's default size. A bigger window draws the console zoomed up from this, so it
+/// fills the window in the same proportions.
+const BASE: [f32; 2] = [760.0, 600.0];
+/// The largest a strip grows, for a window far wider or taller than `BASE`: past these the
 /// strips stay put in the middle of the window.
 const STRIP_MAX_W: f32 = 200.0;
 const STRIP_MAX_H: f32 = 680.0;
@@ -150,7 +153,7 @@ pub(crate) fn spec() -> AppSpec<Mixer> {
                 s.midi_status = "No MIDI device · plug one in".into();
             }),
         ],
-        ..AppSpec::new("Viper Mixer", (760.0, 600.0), || Mixer::new(Default::default()), view)
+        ..AppSpec::new("Viper Mixer", (BASE[0], BASE[1]), || Mixer::new(Default::default()), view)
     }
 }
 
@@ -195,19 +198,16 @@ pub(crate) fn on_close(s: &mut Mixer, tx: &mut Tx) {
 fn view(s: &Mixer, cx: &mut Cx<Mixer>) -> El {
     // Every fader is as tall as the first.
     let fader_h = cx.layout_size("fader-0").map_or(FADER_GUESS, |[_, h]| h);
+    // Zoomed by the tighter of the window's two axes, the console is laid out at the size that
+    // leaves, so it fills the window without stretching out of shape.
+    let [w, h] = cx.layout_size("window").unwrap_or(BASE);
+    let zoom = (w / BASE[0]).min(h / BASE[1]).max(1.0);
     // The gaps between strips, and between the bars, show the lines.
     let mut strips = row().key("strips").grow(1.0).w_full().min_h(0.0).max_h(STRIP_MAX_H).justify_center().gap(1.0);
     for index in 0..FADER_COUNT {
         strips = strips.child(strip(s, index, fader_h));
     }
-    let mut root = col()
-        .key("window")
-        .role("window")
-        .w_full()
-        .h_full()
-        .gap(1.0)
-        .fill(c(LINE))
-        .child(header(s));
+    let mut root = col().key("mixer").gap(1.0).fill(c(LINE)).child(header(s));
     if let Some(banner) = update_banner(s) {
         root = root.child(banner);
     }
@@ -217,7 +217,8 @@ fn view(s: &Mixer, cx: &mut Cx<Mixer>) -> El {
             .child(el().key("scrim").role("none").absolute(0.0, 0.0).w_full().h_full().on_press(|s: &mut Mixer| s.menu = None))
             .child(menu_panel(s, menu));
     }
-    root
+    let root = if zoom > 1.0 { root.size(w / zoom, h / zoom).scale(zoom).origin(0.0, 0.0) } else { root.w_full().h_full() };
+    el().key("window").role("window").w_full().h_full().fill(c(LINE)).child(root)
 }
 
 fn logo() -> El {

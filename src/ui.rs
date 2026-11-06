@@ -299,7 +299,7 @@ fn header(s: &Mixer, narrow: bool) -> El {
                 .h(24.0)
                 .px(10.0)
                 .center()
-                .radius(12.0)
+                .radius(6.0)
                 .fill(health.alpha(0.1))
                 .border(1.0, health)
                 .help(s.pipewire_status.clone())

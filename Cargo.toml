@@ -6,11 +6,12 @@ description = "A MIDI fader controller for PipeWire by Viper"
 license = "MIT"
 
 [dependencies]
-# Rune pins a `dev` rev, which is never rewritten. Only `dbus` is on: the Linux system tray and the
-# desktop's dark preference. The rest of Rune's defaults are for macOS, the web, SVG and screen
-# readers, which the mixer doesn't use.
-rune = { git = "https://github.com/anomalyco/rune", rev = "7ead7d63fcf6f9dd9669385a8b90e2ae80015d7b", default-features = false, features = ["dbus"] }
+# Zed's GPU UI framework draws the window.
+gpui = "0.2.2"
+# The tray, over D-Bus, without a GTK main loop. `async-io` is the runtime GPUI already uses.
+ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
 midir = "0.10"
-# Both are already in Rune's dependency tree, so they add nothing to the build.
+# These are already in GPUI's dependency tree, so they add nothing to the build.
+futures = "0.3"
 png = "0.18"
 serde_json = "1"

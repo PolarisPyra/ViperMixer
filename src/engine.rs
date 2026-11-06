@@ -40,7 +40,7 @@ pub(crate) struct Engine {
 }
 
 impl Engine {
-    pub fn start(wake: rune::Waker) -> Self {
+    pub fn start(wake: crate::signal::Waker) -> Self {
         let (commands, receiver) = mpsc::channel();
         let (events_tx, events) = mpsc::channel();
         let (messages_tx, messages) = mpsc::sync_channel(1024);
@@ -81,7 +81,7 @@ impl Drop for Engine {
     }
 }
 
-fn run(commands: &Receiver<Command>, events: &Sender<Event>, wake: &rune::Waker) {
+fn run(commands: &Receiver<Command>, events: &Sender<Event>, wake: &crate::signal::Waker) {
     let send = |event| {
         let _ = events.send(event);
         wake();

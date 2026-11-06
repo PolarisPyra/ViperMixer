@@ -3,64 +3,72 @@
 //! the controller bindings it learned. A bigger window zooms everything up, and the strips and
 //! faders take whatever is left over.
 
-use crate::config::{FADER_COUNT, INPUT, MIDI_DISCONNECTED, OUTPUT, STEAM_ALL};
-use crate::engine::Engine;
+use crate::config::{Config, FADER_COUNT, INPUT, MIDI_DISCONNECTED, OUTPUT, STEAM_ALL};
 use crate::midi::{self, Control};
 use crate::mixer::{Health, Learn, Menu, Mixer, port_title};
+use crate::signal::Signal;
 use crate::stream::{AudioStream, Device};
-use crate::updates::{RELEASES_URL, UpdateState, Updater};
-use rune::{
-    Align, AppSpec, Color, Cx, Drag, El, Key, KeyEvent, LineCap, Phase, ScrollSpec, Shadow, Shape, Side, Span, Spring, TextStyle, Tx, col, el,
-    row, text,
+use crate::updates::{RELEASES_URL, UpdateState};
+use futures::StreamExt;
+use gpui::prelude::FluentBuilder;
+use gpui::{
+    AnyView, App, AppContext, Application, Bounds, BoxShadow, ClickEvent, Context, Corners, FocusHandle, FontFeatures, FontWeight, Hsla, InteractiveElement, IntoElement,
+    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement, PathBuilder, Pixels, Render, SharedString, StatefulInteractiveElement,
+    Styled, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, anchored, canvas, deferred, div, fill, linear_color_stop,
+    linear_gradient, point, px, rgb, size,
 };
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Space above and below the fader's travel.
 const FADER_PAD: f32 = 4.0;
-const HANDLE_W: f32 = 24.0;
-const HANDLE_H: f32 = 64.0;
-const GROOVE_W: f32 = 6.0;
+/// The fader cap, at the reference console's proportions: one of `CAP_ROWS` per point.
+const HANDLE_W: f32 = 21.0;
+const HANDLE_H: f32 = 47.0;
+/// The slot the cap runs in: a lit rim either side of a dark channel, inside a dark edge.
+const GROOVE_W: f32 = 9.0;
 /// The level lights beside the fader: their size, and how many there are, spread over its travel
 /// so a resize moves them rather than adding or dropping any.
-const LED: f32 = 4.0;
+const LED: f32 = 5.0;
 const LIGHTS: usize = 14;
 const POWER: f32 = 38.0;
 const TAB_H: f32 = 44.0;
 const MUTE_CELL_H: f32 = 92.0;
 const LEVEL_H: f32 = 26.0;
-/// The fader's height before the first layout measures it.
-const FADER_GUESS: f32 = 260.0;
 /// The window's default size. A bigger window zooms everything in it up from this size, the way
 /// a plugin window grows, so the console fills it without stretching out of shape.
 const BASE: [f32; 2] = [760.0, 600.0];
+const MIN: [f32; 2] = [560.0, 460.0];
 /// Wide enough for the update button's longest label, so the header doesn't shift as it changes.
 const UPDATES_W: f32 = 124.0;
 /// How long a strip's controller light stays on after a message.
 const ACTIVITY: Duration = Duration::from_millis(140);
 
 /// The one lit colour: warm, to keep the mixer apart from Viper Music's blues and magentas.
-const ACCENT: &str = "#FF9A3C";
+const ACCENT: u32 = 0xFF9A3C;
 /// The black bars: header, tabs, levels and footer.
-const BAR: &str = "#0F0F10";
+const BAR: u32 = 0x0F0F10;
 /// The lines between cells.
-const LINE: &str = "#1B1B1D";
+const LINE: u32 = 0x1B1B1D;
 /// The grey cells, which fade gently from top to bottom, and the fader cells, which stay flat.
-const CELL_TOP: &str = "#2C2C2F";
-const CELL_BOTTOM: &str = "#252527";
-const CELL: &str = "#29292B";
+const CELL_TOP: u32 = 0x2C2C2F;
+const CELL_BOTTOM: u32 = 0x252527;
+const CELL: u32 = 0x29292B;
 /// A chosen tab, or a control on a bar.
-const RAISED: &str = "#38383B";
-const CONTROL: &str = "#1C1C1E";
-const HAIR: &str = "#2E2E31";
-const LED_OFF: &str = "#47474B";
-const TEXT: &str = "#E8E8EA";
-const DIM: &str = "#9A9A9F";
-const FAINT: &str = "#66666B";
-const RED: &str = "#E5484D";
+const RAISED: u32 = 0x38383B;
+const CONTROL: u32 = 0x1C1C1E;
+const HAIR: u32 = 0x2E2E31;
+const LED_OFF: u32 = 0x47474B;
+const TEXT: u32 = 0xE8E8EA;
+const DIM: u32 = 0x9A9A9F;
+const FAINT: u32 = 0x66666B;
+const RED: u32 = 0xE5484D;
 
 thread_local! {
-    /// How much bigger than at `BASE` the window draws everything: set by `view` each frame,
+    /// How much bigger than at `BASE` the window draws everything: set by `render` each frame,
     /// and read by the handlers it builds, which run between frames.
     static ZOOM: Cell<f32> = const { Cell::new(1.0) };
 }
@@ -71,57 +79,42 @@ fn z(size: f32) -> f32 {
     size * ZOOM.get()
 }
 
-fn font(size: f32, weight: f32) -> TextStyle {
-    TextStyle::new(z(size), weight)
+fn zp(size: f32) -> Pixels {
+    px(z(size))
 }
 
-fn c(hex: &str) -> Color {
-    rune::color::hex(hex).unwrap_or(Color::BLACK)
+fn c(hex: u32) -> Hsla {
+    rgb(hex).into()
 }
 
-fn label(content: impl Into<String>, size: f32, weight: f32, color: &str) -> El {
-    text(content.into()).font(font(size, weight)).color(c(color))
+/// Text in one size, weight and colour.
+fn label(content: impl Into<SharedString>, size: f32, weight: f32, color: Hsla) -> gpui::Div {
+    div().text_size(zp(size)).font_weight(FontWeight(weight)).text_color(color).child(content.into())
 }
 
-fn mono(content: impl Into<String>, size: f32, color: Color) -> El {
-    text(content.into()).font(font(size, 500.0).mono()).color(color)
+/// Text whose digits all take the same width, so a changing level doesn't shuffle sideways.
+fn tabular(mut text: gpui::Div) -> gpui::Div {
+    text.text_style().get_or_insert_with(Default::default).font_features = Some(FontFeatures(Arc::new(vec![("tnum".into(), 1)])));
+    text
 }
 
-/// One line of text in parts of different sizes, weights and colours, sharing a baseline: a
-/// level and its unit, say. `base` sets the line's height and font features.
-fn runs(base: TextStyle, parts: &[(&str, f32, f32, &str)]) -> El {
-    let mut content = String::new();
-    let mut spans = Vec::new();
-    for &(part, size, weight, color) in parts {
-        let start = content.len();
-        content.push_str(part);
-        spans.push(Span::new(start, content.len()).size(z(size)).weight(weight).color(c(color)));
-    }
-    text(content).font(base).spans(spans)
-}
-
-fn health_color(health: Health) -> Color {
+fn health_color(health: Health) -> Hsla {
     c(match health {
-        Health::Good => "#3DD68C",
-        Health::Waiting => "#F5A524",
+        Health::Good => 0x3DD68C,
+        Health::Waiting => 0xF5A524,
         Health::Bad => RED,
     })
 }
 
-fn dot(color: Option<Color>, size: f32) -> El {
-    let size = z(size);
-    el().size(size, size).radius(size / 2.0).fill(color.unwrap_or(c(HAIR))).a11y_hidden()
+fn dot(color: Option<Hsla>, size: f32) -> gpui::Div {
+    div().flex_none().size(zp(size)).rounded_full().bg(color.unwrap_or(c(HAIR)))
 }
 
-fn glow(color: Color, blur: f32) -> Shadow {
-    Shadow { x: 0.0, y: 0.0, blur: z(blur), spread: 0.0, color, inset: false }
+fn glow(color: Hsla, blur: f32) -> BoxShadow {
+    BoxShadow { color, offset: point(px(0.0), px(0.0)), blur_radius: zp(blur), spread_radius: px(0.0) }
 }
 
-/// A level as the scale shows it: the cubic volume PipeWire uses, in dB.
-pub(crate) fn decibels(volume: f32) -> String {
-    format!("{} dB", level_number(volume))
-}
-
+/// A level as the scale shows it, without its unit: the cubic volume PipeWire uses, in dB.
 fn level_number(volume: f32) -> String {
     if volume <= 0.0001 { "−∞".into() } else { format!("{:.1}", 60.0 * volume.log10()).replace('-', "−") }
 }
@@ -135,460 +128,651 @@ fn travel(height: f32) -> f32 {
     (height - z(2.0 * FADER_PAD + HANDLE_H)).max(1.0)
 }
 
-pub(crate) fn spec() -> AppSpec<Mixer> {
-    AppSpec {
-        min_size: Some((560.0, 460.0)),
-        setup: Some(|s, waker| {
-            if rune::tooling::headless_run().is_none() {
-                s.updates = Updater::start(waker.clone());
-                s.attach(Engine::start(waker));
-            }
-        }),
-        poll: Some(poll),
-        on_key: Some(on_key),
-        scenes: &[
-            ("default", demo),
-            ("assign-menu", |s| {
-                demo(s);
-                s.menu = Some(Menu::Assign(1));
-            }),
-            ("midi-menu", |s| {
-                demo(s);
-                s.menu = Some(Menu::Midi);
-            }),
-            ("learning", |s| {
-                demo(s);
-                s.learning = Some(Learn::Mute(2));
-            }),
-            ("update", |s| {
-                demo(s);
-                s.updates.show(UpdateState::Ready { version: "26.12.0".into() });
-            }),
-            ("disconnected", |s| {
-                s.pipewire_health = Health::Bad;
-                s.pipewire_status = "PipeWire unavailable · pw-dump isn't installed; install the PipeWire tools".into();
-                s.midi_status = "No MIDI device · plug one in".into();
-            }),
-        ],
-        ..AppSpec::new("Viper Mixer", (BASE[0], BASE[1]), || Mixer::new(Default::default()), view)
+/// How the window closed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Exit {
+    /// To the tray: the mixer keeps running without it.
+    Hide,
+    Quit,
+}
+
+/// Opens the window and runs it until it closes. A `demo` window never saves.
+pub(crate) fn run(mixer: Rc<RefCell<Mixer>>, signal: Signal, demo: bool) -> Exit {
+    let exit = Rc::new(Cell::new(Exit::Quit));
+    let outcome = exit.clone();
+    let window_signal = signal.clone();
+    Application::new().run(move |cx: &mut App| {
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(BASE[0]), px(BASE[1])), cx))),
+            titlebar: Some(TitlebarOptions { title: Some("Viper Mixer".into()), ..Default::default() }),
+            app_id: Some("viper-mixer".into()),
+            window_min_size: Some(size(px(MIN[0]), px(MIN[1]))),
+            ..Default::default()
+        };
+        let messages = window_signal.open_window();
+        let opened = cx.open_window(options, |window, cx| {
+            cx.new(|cx| {
+                let focus = cx.focus_handle();
+                window.focus(&focus);
+                Console { mixer, signal: window_signal.clone(), exit: exit.clone(), demo, focus, drag: None, faders: Rc::default(), anchors: Rc::default() }
+            })
+        });
+        let Ok(handle) = opened else {
+            eprintln!("Couldn't open the window.");
+            cx.quit();
+            return;
+        };
+        let _ = handle.update(cx, |console, window, cx| {
+            let entity = cx.entity().downgrade();
+            window.on_window_should_close(cx, move |_, cx| {
+                entity.update(cx, |console, _| console.closing()).ok();
+                true
+            });
+            console.listen(handle, messages, cx);
+        });
+    });
+    signal.close_window();
+    outcome.get()
+}
+
+/// Keeps the mixer following the controller while the window is closed to the tray. Returns true
+/// once something asks to show the window, false to quit.
+pub(crate) fn wait_hidden(mixer: &mut Mixer, signal: &Signal) -> bool {
+    let mut next = Duration::ZERO;
+    loop {
+        let pending = signal.wait(next);
+        if pending.quit {
+            return false;
+        }
+        if pending.show {
+            return true;
+        }
+        let now = Instant::now();
+        mixer.drain(now);
+        mixer.updates.take_changed();
+        next = mixer.tick(now);
     }
 }
 
-fn poll(s: &mut Mixer, _: f64, tx: &mut Tx) -> bool {
-    let now = Instant::now();
-    let mut changed = s.drain(now) | s.updates.take_changed();
-    let mut next = s.tick(now);
-    for slot in &mut s.touched_at {
-        if let Some(at) = *slot {
-            match ACTIVITY.checked_sub(now.duration_since(at)) {
-                Some(left) if !left.is_zero() => next = next.min(left),
-                _ => {
-                    *slot = None;
-                    changed = true;
+pub(crate) struct Console {
+    mixer: Rc<RefCell<Mixer>>,
+    signal: Signal,
+    exit: Rc<Cell<Exit>>,
+    demo: bool,
+    focus: FocusHandle,
+    drag: Option<FaderDrag>,
+    /// Each fader's bounds, from the last frame, for turning the pointer into a level.
+    faders: Rc<RefCell<[Bounds<Pixels>; FADER_COUNT]>>,
+    /// Where the menu buttons are, from the last frame, for hanging their menus under them.
+    anchors: Rc<RefCell<HashMap<String, Bounds<Pixels>>>>,
+}
+
+/// A fader being dragged: where the pointer went down and the level it had then.
+#[derive(Clone, Copy)]
+struct FaderDrag {
+    index: usize,
+    start_y: f32,
+    start: f32,
+}
+
+impl Console {
+    /// Reads what the workers sent each time one wakes the window, and runs the mixer's periodic
+    /// work when it's due.
+    fn listen(&self, handle: WindowHandle<Console>, mut messages: futures::channel::mpsc::UnboundedReceiver<()>, cx: &mut Context<Self>) {
+        cx.spawn(async move |_, cx| {
+            loop {
+                let Ok(next) = handle.update(cx, |console, window, cx| console.poll(window, cx)) else { break };
+                let timer = cx.background_executor().timer(next);
+                if let futures::future::Either::Left((None, _)) = futures::future::select(messages.next(), timer).await {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn poll(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Duration {
+        let pending = self.signal.take();
+        if pending.quit {
+            self.closing();
+            self.exit.set(Exit::Quit);
+            cx.quit();
+        }
+        if pending.show {
+            window.activate_window();
+        }
+        let now = Instant::now();
+        let mut s = self.mixer.borrow_mut();
+        let mut changed = s.drain(now) | s.updates.take_changed();
+        let mut next = s.tick(now);
+        for slot in &mut s.touched_at {
+            if let Some(at) = *slot {
+                match ACTIVITY.checked_sub(now.duration_since(at)) {
+                    Some(left) if !left.is_zero() => next = next.min(left),
+                    _ => {
+                        *slot = None;
+                        changed = true;
+                    }
                 }
             }
         }
+        if changed {
+            cx.notify();
+        }
+        next
     }
-    tx.wake_after(next);
-    changed
-}
 
-fn on_key(s: &mut Mixer, key: &KeyEvent, _: &mut Tx) -> bool {
-    if key.key == Key::Escape && (s.learning.is_some() || s.menu.is_some()) {
-        s.learning = None;
+    /// The window is closing: to the tray, unless that's off or there's no tray.
+    fn closing(&mut self) {
+        let mut s = self.mixer.borrow_mut();
         s.menu = None;
-        return true;
+        s.learning = None;
+        if !self.demo {
+            s.save_now();
+        }
+        let hide = s.config.close_to_tray && s.tray_available && !self.demo;
+        self.exit.set(if hide { Exit::Hide } else { Exit::Quit });
     }
-    false
+
+    fn on_key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let mut s = self.mixer.borrow_mut();
+        if event.keystroke.key == "escape" && (s.learning.is_some() || s.menu.is_some()) {
+            s.learning = None;
+            s.menu = None;
+            cx.notify();
+        }
+    }
+
+    fn fader_down(&mut self, index: usize, event: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let bounds = self.faders.borrow()[index];
+        let height = f32::from(bounds.size.height);
+        let y = f32::from(event.position.y - bounds.origin.y);
+        let mut s = self.mixer.borrow_mut();
+        let at = handle_y(s.config.fader_volumes[index], height);
+        if event.click_count == 2 {
+            // A double press puts the fader back at unity.
+            s.set_volume(index, 1.0);
+        } else if (y - at).abs() > z(HANDLE_H / 2.0) {
+            // Pressed beside the handle: it jumps there and drags from it.
+            s.set_volume(index, 1.0 - (y - z(FADER_PAD + HANDLE_H / 2.0)) / travel(height));
+        }
+        self.drag = Some(FaderDrag { index, start_y: y, start: s.config.fader_volumes[index] });
+        cx.notify();
+    }
+
+    fn pointer_moved(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(drag) = self.drag else { return };
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.drag = None;
+            return;
+        }
+        let bounds = self.faders.borrow()[drag.index];
+        let y = f32::from(event.position.y - bounds.origin.y);
+        self.mixer.borrow_mut().set_volume(drag.index, drag.start - (y - drag.start_y) / travel(f32::from(bounds.size.height)));
+        cx.notify();
+    }
 }
 
-/// Closing the window hides it to the tray, unless that's off or there's no tray.
-pub(crate) fn on_close(s: &mut Mixer, tx: &mut Tx) {
-    s.menu = None;
-    s.learning = None;
-    s.save_now();
-    if !(s.config.close_to_tray && s.tray_available) {
-        tx.quit();
+/// A click handler that changes the mixer and redraws.
+fn act(cx: &mut Context<Console>, change: impl Fn(&mut Mixer) + 'static) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
+    cx.listener(move |console, _, _, cx| {
+        change(&mut console.mixer.borrow_mut());
+        cx.notify();
+    })
+}
+
+/// Records where an element is each frame, under `key`, for a menu to hang from.
+fn anchor(anchors: &Rc<RefCell<HashMap<String, Bounds<Pixels>>>>, key: String) -> impl IntoElement {
+    let anchors = anchors.clone();
+    canvas(move |bounds, _, _| anchors.borrow_mut().insert(key, bounds), |_, _, _, _| {}).absolute().size_full()
+}
+
+/// A tooltip: one line of help on a dark plate.
+struct Tip(SharedString);
+
+impl Render for Tip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px(zp(8.0))
+            .py(zp(5.0))
+            .rounded(zp(5.0))
+            .bg(c(0x222224))
+            .border_1()
+            .border_color(c(0x3A3A3D))
+            .text_size(zp(11.0))
+            .text_color(c(TEXT))
+            .child(self.0.clone())
     }
 }
 
-fn view(s: &Mixer, cx: &mut Cx<Mixer>) -> El {
-    // Every fader is as tall as the first.
-    let fader_h = cx.layout_size("fader-0").map_or(FADER_GUESS, |[_, h]| h);
-    // Zoomed by the tighter of the window's two axes, smoothly, so a resize grows everything
-    // together rather than in jumps.
-    let [w, h] = cx.layout_size("window").unwrap_or(BASE);
-    ZOOM.set((w / BASE[0]).min(h / BASE[1]).max(1.0));
-    // The gaps between strips, and between the bars, show the lines.
-    let mut strips = row().key("strips").grow(1.0).w_full().min_h(0.0).gap(1.0);
-    for index in 0..FADER_COUNT {
-        strips = strips.child(strip(s, index, fader_h));
+fn tip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    let text = text.into();
+    move |_, cx| cx.new(|_| Tip(text.clone())).into()
+}
+
+impl Render for Console {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Zoomed by the tighter of the window's two axes, smoothly, so a resize grows everything
+        // together rather than in jumps.
+        let viewport = window.viewport_size();
+        ZOOM.set((f32::from(viewport.width) / BASE[0]).min(f32::from(viewport.height) / BASE[1]).max(1.0));
+        let mixer = self.mixer.clone();
+        let s = mixer.borrow();
+        // The gaps between strips, and between the bars, show the lines.
+        let mut strips = div().flex().flex_grow().w_full().min_h(px(0.0)).gap(px(1.0));
+        for index in 0..FADER_COUNT {
+            strips = strips.child(self.strip(&s, index, cx));
+        }
+        let mut root = div()
+            .id("window")
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(Console::on_key))
+            .on_mouse_move(cx.listener(Console::pointer_moved))
+            .on_mouse_up(MouseButton::Left, cx.listener(|console, _, _, _| console.drag = None))
+            .relative()
+            .flex()
+            .flex_col()
+            .size_full()
+            .gap(px(1.0))
+            .bg(c(LINE))
+            .text_color(c(TEXT))
+            .child(self.header(&s, cx));
+        if let Some(banner) = update_banner(&s, cx) {
+            root = root.child(banner);
+        }
+        root = root.child(strips).child(footer(&s, cx));
+        if let Some(menu) = s.menu {
+            root = root
+                .child(deferred(
+                    div().absolute().top_0().left_0().size_full().occlude().on_mouse_down(MouseButton::Left, cx.listener(|console, _, _, cx| {
+                        console.mixer.borrow_mut().menu = None;
+                        cx.notify();
+                    })),
+                ))
+                .child(deferred(menu_panel(&s, menu, &self.anchors, cx)).with_priority(1));
+        }
+        root
     }
-    let mut root = col().key("window").role("window").w_full().h_full().gap(1.0).fill(c(LINE)).child(header(s));
-    if let Some(banner) = update_banner(s) {
-        root = root.child(banner);
+}
+
+impl Console {
+    fn header(&self, s: &Mixer, cx: &mut Context<Self>) -> impl IntoElement {
+        let health = health_color(s.pipewire_health);
+        let port = if s.connected_port.is_empty() {
+            match s.config.midi_port.as_str() {
+                "" => "Automatic".to_owned(),
+                MIDI_DISCONNECTED => "Off".to_owned(),
+                saved => port_title(saved).to_owned(),
+            }
+        } else {
+            port_title(&s.connected_port).to_owned()
+        };
+        let open = s.menu == Some(Menu::Midi);
+        let update = s.updates.state();
+        let checking = matches!(update, UpdateState::Checking | UpdateState::Downloading { .. });
+        let updates_label = match &update {
+            UpdateState::Checking => "Checking…".to_owned(),
+            UpdateState::UpToDate => "Up to date".to_owned(),
+            UpdateState::Downloading { percent: Some(percent), .. } => format!("Downloading {percent}%"),
+            UpdateState::Downloading { percent: None, .. } => "Downloading…".to_owned(),
+            _ => "Check for updates".to_owned(),
+        };
+        let mut updates = bar_button("updates").w(zp(UPDATES_W)).child(label(updates_label, 11.0, 500.0, c(TEXT)));
+        if !checking {
+            updates = updates.hover(|style| style.bg(gpui::white().alpha(0.05))).on_click(act(cx, |s| s.updates.check_now()));
+        }
+        div()
+            .flex()
+            .flex_none()
+            .h(zp(46.0))
+            .w_full()
+            .px(zp(14.0))
+            .gap(zp(10.0))
+            .items_center()
+            .bg(c(BAR))
+            .child(
+                div()
+                    .flex()
+                    .items_baseline()
+                    .gap(zp(10.0))
+                    .child(label("Viper Mixer", 13.5, 650.0, c(TEXT)))
+                    .child(label(env!("CARGO_PKG_VERSION"), 11.0, 500.0, c(FAINT))),
+            )
+            .child(div().flex_grow())
+            .child(
+                div()
+                    .id("pipewire")
+                    .flex()
+                    .flex_none()
+                    .h(zp(24.0))
+                    .px(zp(10.0))
+                    .items_center()
+                    .rounded(zp(6.0))
+                    .bg(health.alpha(0.1))
+                    .border_1()
+                    .border_color(health)
+                    .tooltip(tip(s.pipewire_status.clone()))
+                    .child(label("PipeWire", 11.0, 600.0, health)),
+            )
+            .child(
+                div()
+                    .id("midi-button")
+                    .relative()
+                    .flex()
+                    .flex_shrink()
+                    .w(zp(210.0))
+                    .min_w(zp(120.0))
+                    .h(zp(28.0))
+                    .px(zp(10.0))
+                    .gap(zp(8.0))
+                    .items_center()
+                    .rounded(zp(6.0))
+                    .bg(c(CONTROL))
+                    .border_1()
+                    .border_color(if open { c(ACCENT) } else { c(HAIR) })
+                    .hover(|style| style.bg(c(0x252527)))
+                    .tooltip(tip(s.midi_status.clone()))
+                    .on_click(act(cx, |s| s.menu = if s.menu == Some(Menu::Midi) { None } else { Some(Menu::Midi) }))
+                    .child(anchor(&self.anchors, "midi-button".into()))
+                    .child(dot(Some(health_color(s.midi_health())), 6.0))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_grow()
+                            .min_w(px(0.0))
+                            .items_baseline()
+                            .gap(zp(8.0))
+                            .child(label("MIDI", 10.0, 600.0, c(FAINT)).flex_none())
+                            .child(label(port, 12.0, 500.0, c(TEXT)).min_w(px(0.0)).truncate()),
+                    )
+                    .child(label("▾", 10.0, 500.0, c(FAINT))),
+            )
+            .child(updates)
     }
-    root = root.child(strips).child(footer(s));
-    if let Some(menu) = s.menu {
-        root = root
-            .child(el().key("scrim").role("none").absolute(0.0, 0.0).w_full().h_full().on_press(|s: &mut Mixer| s.menu = None))
-            .child(menu_panel(s, menu));
+
+    fn strip(&self, s: &Mixer, index: usize, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w(zp(84.0))
+            .gap(px(1.0))
+            .child(self.name_tab(s, index, cx))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_none()
+                    .h(zp(MUTE_CELL_H))
+                    .w_full()
+                    .bg(linear_gradient(180.0, linear_color_stop(c(CELL_TOP), 0.0), linear_color_stop(c(CELL_BOTTOM), 1.0)))
+                    .items_center()
+                    .justify_center()
+                    .px(zp(8.0))
+                    .gap(zp(10.0))
+                    .child(power_button(s, index, cx))
+                    .child(binding_chip(s, index, true, cx)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .h(zp(LEVEL_H))
+                    .w_full()
+                    .bg(c(BAR))
+                    .justify_center()
+                    .items_center()
+                    .child(
+                        div()
+                            .flex()
+                            .items_baseline()
+                            .gap(zp(3.0))
+                            .child(tabular(label(level_number(s.config.fader_volumes[index]), 12.0, 600.0, c(TEXT))))
+                            .child(label("dB", 9.5, 500.0, c(FAINT))),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .w_full()
+                    .flex_grow()
+                    .min_h(px(0.0))
+                    .bg(c(CELL))
+                    .px(zp(8.0))
+                    .pt(zp(10.0))
+                    .pb(zp(8.0))
+                    .gap(zp(6.0))
+                    .child(self.fader(s, index, cx))
+                    .child(binding_chip(s, index, false, cx)),
+            )
     }
-    root
+
+    /// The strip's tab: what it drives, and a press picks something else.
+    fn name_tab(&self, s: &Mixer, index: usize, cx: &mut Context<Self>) -> impl IntoElement {
+        let health = if s.is_live(index) {
+            Some(Health::Good)
+        } else if s.is_present(index) {
+            Some(Health::Waiting)
+        } else {
+            None
+        };
+        let open = s.menu == Some(Menu::Assign(index));
+        let key = format!("assign-{index}");
+        div().flex().flex_none().h(zp(TAB_H)).w_full().px(zp(6.0)).items_center().justify_center().bg(c(BAR)).child(
+            div()
+                .id(SharedString::from(key.clone()))
+                .relative()
+                .flex()
+                .flex_col()
+                .w_full()
+                .px(zp(6.0))
+                .py(zp(4.0))
+                .gap(px(1.0))
+                .items_center()
+                .rounded(zp(6.0))
+                .when(open, |tab| tab.bg(c(RAISED)))
+                .hover(|style| style.bg(gpui::white().alpha(0.06)))
+                .on_click(act(cx, move |s| s.menu = if s.menu == Some(Menu::Assign(index)) { None } else { Some(Menu::Assign(index)) }))
+                .child(anchor(&self.anchors, key))
+                .child(
+                    div()
+                        .flex()
+                        .w_full()
+                        .justify_center()
+                        .items_center()
+                        .gap(zp(5.0))
+                        .child(dot(health.map(health_color), 5.0))
+                        .child(label(s.strip_title(index), 12.0, 600.0, c(TEXT)).min_w(px(0.0)).truncate())
+                        .child(label("▾", 9.0, 500.0, c(FAINT))),
+                )
+                .child(label(s.strip_detail(index), 10.0, 400.0, c(FAINT)).w_full().text_center().truncate()),
+        )
+    }
+
+    fn fader(&self, s: &Mixer, index: usize, cx: &mut Context<Self>) -> impl IntoElement {
+        let volume = s.config.fader_volumes[index];
+        let muted = s.muted[index];
+        let lit = s.touched_at[index].is_some_and(|at| at.elapsed() < ACTIVITY);
+        let faders = self.faders.clone();
+        // The whole width takes the drag, not just the handle.
+        div()
+            .id(SharedString::from(format!("fader-{index}")))
+            .relative()
+            .w_full()
+            .flex_grow()
+            .min_h(px(0.0))
+            .on_mouse_down(MouseButton::Left, cx.listener(move |console, event, window, cx| console.fader_down(index, event, window, cx)))
+            .child(
+                canvas(
+                    move |bounds, _, _| faders.borrow_mut()[index] = bounds,
+                    move |bounds, _, window, _| paint_fader(bounds, volume, muted, lit, window),
+                )
+                .absolute()
+                .size_full(),
+            )
+    }
 }
 
 /// A bordered button on one of the black bars.
-fn bar_button(key: &str) -> El {
-    el().key(key)
-        .role("button")
-        .focusable(true)
-        .h(z(28.0))
-        .px(z(12.0))
-        .center()
-        .radius(z(6.0))
-        .fill(c(CONTROL))
-        .border(1.0, c(HAIR))
-        .hover(Color::WHITE.alpha(0.05))
-}
-
-fn header(s: &Mixer) -> El {
-    let health = health_color(s.pipewire_health);
-    let port = if s.connected_port.is_empty() {
-        match s.config.midi_port.as_str() {
-            "" => "Automatic".to_owned(),
-            MIDI_DISCONNECTED => "Off".to_owned(),
-            saved => port_title(saved).to_owned(),
-        }
-    } else {
-        port_title(&s.connected_port).to_owned()
-    };
-    let open = s.menu == Some(Menu::Midi);
-    let update = s.updates.state();
-    let checking = matches!(update, UpdateState::Checking | UpdateState::Downloading { .. });
-    let updates_label = match &update {
-        UpdateState::Checking => "Checking…".to_owned(),
-        UpdateState::UpToDate => "Up to date".to_owned(),
-        UpdateState::Downloading { percent: Some(percent), .. } => format!("Downloading {percent}%"),
-        UpdateState::Downloading { percent: None, .. } => "Downloading…".to_owned(),
-        _ => "Check for updates".to_owned(),
-    };
-    row()
-        .key("header")
-        .h(z(46.0))
-        .w_full()
-        .px(z(14.0))
-        .gap(z(10.0))
-        .center_y()
-        .fill(c(BAR))
-        .child(runs(
-            font(13.5, 650.0),
-            &[("Viper Mixer", 13.5, 650.0, TEXT), (concat!("   ", env!("CARGO_PKG_VERSION")), 11.0, 500.0, FAINT)],
-        ))
-        .child(el().grow(1.0))
-        .child(
-            row()
-                .key("pipewire")
-                .h(z(24.0))
-                .px(z(10.0))
-                .center()
-                .radius(z(6.0))
-                .fill(health.alpha(0.1))
-                .border(1.0, health)
-                .help(s.pipewire_status.clone())
-                .child(text("PipeWire").font(font(11.0, 600.0)).color(health)),
-        )
-        .child(
-            row()
-                .key("midi-button")
-                .role("button")
-                .label("MIDI device")
-                .help(s.midi_status.clone())
-                .focusable(true)
-                .w(z(210.0))
-                .shrink()
-                .min_w(z(120.0))
-                .h(z(28.0))
-                .px(z(10.0))
-                .gap(z(8.0))
-                .center_y()
-                .radius(z(6.0))
-                .fill(c(CONTROL))
-                .border(1.0, if open { c(ACCENT) } else { c(HAIR) })
-                .hover(Color::WHITE.alpha(0.05))
-                .on_press(|s: &mut Mixer| s.menu = if s.menu == Some(Menu::Midi) { None } else { Some(Menu::Midi) })
-                .child(dot(Some(health_color(s.midi_health())), 6.0))
-                .child(runs(font(12.0, 500.0), &[("MIDI   ", 10.0, 600.0, FAINT), (&port, 12.0, 500.0, TEXT)]).grow(1.0).truncate())
-                .child(label("▾", 10.0, 500.0, FAINT)),
-        )
-        .child(
-            bar_button("updates")
-                .w(z(UPDATES_W))
-                // Its label and highlight change at once, without sliding or fading.
-                .instant_changes()
-                .motion(Spring::NONE)
-                .label(format!("Check for updates to Viper Mixer {}", env!("CARGO_PKG_VERSION")))
-                .a11y_value(updates_label.clone())
-                .focusable(!checking)
-                .hover(Color::WHITE.alpha(if checking { 0.0 } else { 0.05 }))
-                .on_press(move |s: &mut Mixer| {
-                    if !checking {
-                        s.updates.check_now();
-                    }
-                })
-                .child(label(updates_label, 11.0, 500.0, TEXT).a11y_hidden()),
-        )
-}
-
-fn strip(s: &Mixer, index: usize, fader_h: f32) -> El {
-    col()
-        .key(format!("strip-{index}"))
-        .w(z(0.0))
-        .grow(1.0)
-        .min_w(z(84.0))
-        .gap(1.0)
-        .child(name_tab(s, index))
-        .child(
-            col()
-                .key("mute-cell")
-                .h(z(MUTE_CELL_H))
-                .w_full()
-                .gradient(c(CELL_TOP), c(CELL_BOTTOM))
-                .center()
-                .px(z(8.0))
-                .gap(z(10.0))
-                .child(power_button(s, index))
-                .child(binding_chip(s, index, true)),
-        )
-        .child(
-            row()
-                .key("level")
-                .h(z(LEVEL_H))
-                .w_full()
-                .fill(c(BAR))
-                .justify_center()
-                .items_center()
-                .gap(z(3.0))
-                .child(runs(
-                    font(12.0, 600.0).features("'tnum' 1"),
-                    &[(&level_number(s.config.fader_volumes[index]), 12.0, 600.0, TEXT), (" dB", 9.5, 500.0, FAINT)],
-                )),
-        )
-        .child(
-            col()
-                .key("fader-cell")
-                .w_full()
-                .grow(1.0)
-                .min_h(0.0)
-                .fill(c(CELL))
-                .px(z(8.0))
-                .pt(z(10.0))
-                .pb(z(8.0))
-                .gap(z(6.0))
-                .child(fader(s, index, fader_h))
-                .child(binding_chip(s, index, false)),
-        )
-}
-
-/// The strip's tab: what it drives, and a press picks something else.
-fn name_tab(s: &Mixer, index: usize) -> El {
-    let health = if s.is_live(index) {
-        Some(Health::Good)
-    } else if s.is_present(index) {
-        Some(Health::Waiting)
-    } else {
-        None
-    };
-    let open = s.menu == Some(Menu::Assign(index));
-    el().key(format!("tab-{index}")).h(z(TAB_H)).w_full().px(z(6.0)).center().fill(c(BAR)).child(
-        col()
-            .key(format!("assign-{index}"))
-            .role("button")
-            .label(format!("Strip {} assignment", index + 1))
-            .focusable(true)
-            .w_full()
-            .px(z(6.0))
-            .py(z(4.0))
-            .gap(1.0)
-            .items_center()
-            .radius(z(6.0))
-            .fill(if open { c(RAISED) } else { Color::TRANSPARENT })
-            .hover(Color::WHITE.alpha(0.06))
-            .on_press(move |s: &mut Mixer| {
-                s.menu = if s.menu == Some(Menu::Assign(index)) { None } else { Some(Menu::Assign(index)) };
-            })
-            .child(
-                row()
-                    .w_full()
-                    .justify_center()
-                    .gap(z(5.0))
-                    .center_y()
-                    .child(dot(health.map(health_color), 5.0))
-                    .child(label(s.strip_title(index), 12.0, 600.0, TEXT).shrink().truncate())
-                    .child(label("▾", 9.0, 500.0, FAINT)),
-            )
-            .child(label(s.strip_detail(index), 10.0, 400.0, FAINT).w_full().align(Align::Center).truncate()),
-    )
+fn bar_button(id: &'static str) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .flex()
+        .flex_none()
+        .h(zp(28.0))
+        .px(zp(12.0))
+        .items_center()
+        .justify_center()
+        .rounded(zp(6.0))
+        .bg(c(CONTROL))
+        .border_1()
+        .border_color(c(HAIR))
 }
 
 /// A power symbol: a ring open at the top, and a bar through the gap.
-fn power_icon(color: Color) -> El {
-    let (x, y, r) = (z(8.0), z(8.5), z(6.0));
-    let arc: Vec<[f32; 2]> = (0..=24)
-        .map(|step| {
-            let angle = (40.0 + 280.0 * step as f32 / 24.0f32).to_radians();
-            [x + r * angle.sin(), y - r * angle.cos()]
-        })
-        .collect();
-    el().size(z(16.0), z(16.0))
-        .shape(Shape::new().stroke(arc, z(1.8), color).line([x, z(1.5)], [x, z(8.0)], z(1.8), LineCap::Round, color))
-        .a11y_hidden()
+fn power_icon(color: Hsla) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let (x, y, r) = (bounds.origin.x + zp(8.0), bounds.origin.y + zp(8.5), z(6.0));
+            let mut ring = PathBuilder::stroke(zp(1.8));
+            for step in 0..=24 {
+                let angle = (40.0 + 280.0 * step as f32 / 24.0f32).to_radians();
+                let at = point(x + px(r * angle.sin()), y - px(r * angle.cos()));
+                if step == 0 { ring.move_to(at) } else { ring.line_to(at) }
+            }
+            let mut bar = PathBuilder::stroke(zp(1.8));
+            bar.move_to(point(x, bounds.origin.y + zp(1.5)));
+            bar.line_to(point(x, bounds.origin.y + zp(8.0)));
+            for path in [ring, bar] {
+                if let Ok(path) = path.build() {
+                    window.paint_path(path, color);
+                }
+            }
+        },
+    )
+    .size(zp(16.0))
 }
 
 /// The strip's mute, as a power button: dark while the strip plays, glowing red while it's muted.
-fn power_button(s: &Mixer, index: usize) -> El {
+fn power_button(s: &Mixer, index: usize, cx: &mut Context<Console>) -> impl IntoElement {
     let muted = s.muted[index];
     let red = c(RED);
-    let button = el()
-        .key(format!("mute-{index}"))
-        .role("switch")
-        .label(format!("Mute strip {}", index + 1))
-        .help(if muted { "Muted. Press to unmute." } else { "Playing. Press to mute." })
-        .checked(muted)
-        .focusable(true)
-        .size(z(POWER), z(POWER))
-        .radius(z(POWER / 2.0))
-        .center()
-        .gradient(c("#48484C"), c("#2A2A2D"))
-        .border(z(2.0), if muted { red } else { c("#161618") })
-        .shadow(z(2.0), z(5.0), Color::BLACK.alpha(0.6))
-        .hover(Color::WHITE.alpha(0.05))
-        .on_press(move |s: &mut Mixer| s.set_muted(index, !s.muted[index]))
-        .child(power_icon(if muted { red } else { c(DIM) }));
-    if muted { button.box_shadow(glow(red.alpha(0.55), 12.0)) } else { button }
+    let mut shadows = vec![BoxShadow { color: gpui::black().alpha(0.6), offset: point(px(0.0), zp(2.0)), blur_radius: zp(5.0), spread_radius: px(0.0) }];
+    if muted {
+        shadows.push(glow(red.alpha(0.55), 12.0));
+    }
+    div()
+        .id(SharedString::from(format!("mute-{index}")))
+        .flex()
+        .flex_none()
+        .size(zp(POWER))
+        .rounded_full()
+        .items_center()
+        .justify_center()
+        .bg(linear_gradient(180.0, linear_color_stop(c(0x48484C), 0.0), linear_color_stop(c(0x2A2A2D), 1.0)))
+        .border(zp(2.0))
+        .border_color(if muted { red } else { c(0x161618) })
+        .shadow(shadows)
+        .tooltip(tip(if muted { "Muted. Press to unmute." } else { "Playing. Press to mute." }))
+        .on_click(act(cx, move |s| s.set_muted(index, !s.muted[index])))
+        .child(power_icon(if muted { red } else { c(DIM) }))
 }
 
-/// The lights beside a fader, lit from the bottom up to its level; a muted strip's are grey. The
-/// bottom one marks silence and stays dark.
-fn level_lights(volume: f32, height: f32, muted: bool) -> El {
-    let (top, bottom, at) = (handle_y(1.0, height), handle_y(0.0, height), handle_y(volume, height));
-    let lit = if muted { c(DIM) } else { c(ACCENT) };
-    let mut lights = el().key("lights").w(z(LED)).h_full().a11y_hidden();
+/// A fader cap's rows from top to bottom, taken pixel by pixel from the reference console's cap:
+/// a lit top face, fine ribs either side of a white line across the middle, and a black bottom
+/// face. Each row is a point tall, so the cap keeps the reference's proportions.
+const CAP_ROWS: [u32; 47] = [
+    0x444444, 0x969696, 0x828282, 0x888888, 0x868686, 0x848484, 0x999999, 0x292929, 0x000000, 0x292929, 0x5E5E5E, 0x0C0C0C,
+    0x222222, 0x161616, 0x6B6B6B, 0x5F5F5F, 0x1A1A1A, 0x2F2F2F, 0x3A3A3A, 0x8E8E8E, 0x5B5B5B, 0x2B2B2B, 0x636363, 0xE1E1E1,
+    0xDEDEDE, 0xC5C5C5, 0x484848, 0x5E5E5E, 0x1C1C1C, 0x131313, 0x6C6C6C, 0x636363, 0x737373, 0x101010, 0x505050, 0x7D7D7D,
+    0x7D7D7D, 0x737373, 0x2D2D2D, 0x828282, 0x9B9B9B, 0x363636, 0x080808, 0x111111, 0x111111, 0x111111, 0x111111,
+];
+
+/// The coloured line inside the groove, as the reference draws it: three columns, the middle one
+/// brightest.
+const FILL_LIT: [u32; 3] = [0x8A4A12, 0xFFC27A, 0xC2661A];
+const FILL_MUTED: [u32; 3] = [0x3A3A3D, 0x9A9A9F, 0x5A5A5E];
+
+/// Draws a fader into `bounds`: the lights, the groove with its lit line and cap, and the thin
+/// activity line on the right. Edges land on whole device pixels, so nothing blurs at any zoom.
+fn paint_fader(bounds: Bounds<Pixels>, volume: f32, muted: bool, lit: bool, window: &mut Window) {
+    let scale = window.scale_factor();
+    let snap = |value: f32| (value * scale).round() / scale;
+    let rect = |x: f32, y: f32, w: f32, h: f32| Bounds::new(point(px(snap(x)), px(snap(y))), size(px(snap(x + w) - snap(x)), px(snap(y + h) - snap(y))));
+    let height = f32::from(bounds.size.height);
+    let (left, top0) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
+    let (top, bottom, at) = (top0 + handle_y(1.0, height), top0 + handle_y(0.0, height), top0 + handle_y(volume, height));
+    let gap = z(14.0);
+    let total = z(LED) + gap + z(HANDLE_W) + gap + z(2.0);
+    let lights_x = left + (f32::from(bounds.size.width) - total) / 2.0;
+    let track_x = lights_x + z(LED) + gap;
+    let signal_x = track_x + z(HANDLE_W) + gap;
+    let accent = c(ACCENT);
+
+    // The lights, lit from the bottom up to the level; a muted strip's are grey. The bottom one
+    // marks silence and stays dark.
+    let on_color = if muted { c(DIM) } else { accent };
     for step in 0..LIGHTS {
         let y = top + (bottom - top) * step as f32 / (LIGHTS - 1) as f32;
         let floor = step == LIGHTS - 1;
         let on = !floor && volume > 0.0 && y >= at - 0.5;
-        let off = if floor { c("#0A0A0B") } else { c(LED_OFF) };
-        let mut light = el().size(z(LED), z(LED)).radius(z(LED / 2.0)).absolute(0.0, y - z(LED / 2.0)).fill(if on { lit } else { off });
+        let light = rect(lights_x, y - z(LED / 2.0), z(LED), z(LED));
+        let radius = Corners::all(px(z(LED / 2.0)));
         if on && !muted {
-            light = light.box_shadow(glow(lit.alpha(0.7), 6.0));
+            window.paint_shadows(light, radius, &[BoxShadow { spread_radius: zp(1.0), ..glow(accent.alpha(0.75), 6.0) }]);
         }
-        lights = lights.child(light);
+        let off = if floor { c(0x0A0A0B) } else { c(LED_OFF) };
+        window.paint_quad(fill(light, if on { on_color } else { off }).corner_radii(radius));
     }
-    lights
-}
 
-/// A fader cap's rows from top to bottom, taken pixel by pixel from the reference console's
-/// 48-pixel cap: a lit top face, fine ribs either side of a white line across the middle, and a
-/// black bottom face. They are stretched evenly to `HANDLE_H`.
-const CAP_ROWS: [&str; 48] = [
-    "#444444", "#969696", "#828282", "#888888", "#868686", "#848484", "#999999", "#292929",
-    "#000000", "#292929", "#5E5E5E", "#0C0C0C", "#222222", "#161616", "#6B6B6B", "#5F5F5F",
-    "#1A1A1A", "#2F2F2F", "#3A3A3A", "#8E8E8E", "#5B5B5B", "#2B2B2B", "#636363", "#E1E1E1",
-    "#DEDEDE", "#C5C5C5", "#484848", "#5E5E5E", "#1C1C1C", "#131313", "#6C6C6C", "#636363",
-    "#737373", "#101010", "#505050", "#7D7D7D", "#7D7D7D", "#737373", "#2D2D2D", "#828282",
-    "#9B9B9B", "#363636", "#080808", "#111111", "#111111", "#111111", "#111111", "#111111",
-];
+    // The groove: a dark channel between two lit rims, running past both ends of the travel.
+    let groove_x = track_x + z((HANDLE_W - GROOVE_W) / 2.0);
+    let (groove_top, groove_h) = (top - z(GROOVE_W / 2.0), bottom - top + z(GROOVE_W));
+    for (inset, color) in [(0.0, 0x1C1C1D), (1.0, 0x47474A), (2.0, 0x141415)] {
+        let layer = rect(groove_x + z(inset), groove_top + z(inset), z(GROOVE_W - 2.0 * inset), groove_h - z(2.0 * inset));
+        window.paint_quad(fill(layer, c(color)).corner_radii(Corners::all(px(z(GROOVE_W / 2.0 - inset)))));
+    }
 
-/// A fader cap: a flat block of grey ribs with a white line across its middle.
-fn cap(y: f32) -> El {
-    let mut cap = el()
-        .key("handle")
-        .size(z(HANDLE_W), z(HANDLE_H))
-        .absolute(0.0, y - z(HANDLE_H / 2.0))
-        .box_shadow(Shadow { x: 0.0, y: z(1.0), blur: z(3.0), spread: z(1.0), color: Color::BLACK.alpha(0.6), inset: false });
+    // The level, as a line up the groove to the cap.
+    let fill_x = track_x + z((HANDLE_W - 3.0) / 2.0);
+    for (column, color) in (if muted { FILL_MUTED } else { FILL_LIT }).into_iter().enumerate() {
+        window.paint_quad(fill(rect(fill_x + z(column as f32), at, z(1.0), (bottom - at).max(0.0)), c(color)));
+    }
+
+    // The cap, a row of the reference per point, with its shadow on the panel.
+    let cap_top = snap(at - z(HANDLE_H / 2.0));
+    let cap = rect(track_x, cap_top, z(HANDLE_W), z(HANDLE_H));
+    window.paint_shadows(
+        cap,
+        Corners::all(px(0.0)),
+        &[BoxShadow { color: gpui::black().alpha(0.6), offset: point(px(0.0), zp(1.0)), blur_radius: zp(3.0), spread_radius: zp(1.0) }],
+    );
     let row_h = z(HANDLE_H) / CAP_ROWS.len() as f32;
-    for (row, color) in CAP_ROWS.iter().enumerate() {
-        cap = cap.child(el().size(z(HANDLE_W), row_h).absolute(0.0, row as f32 * row_h).fill(c(color)));
+    for (row, color) in CAP_ROWS.into_iter().enumerate() {
+        let (from, to) = (snap(cap_top + row as f32 * row_h), snap(cap_top + (row + 1) as f32 * row_h));
+        window.paint_quad(fill(rect(track_x, from, z(HANDLE_W), to - from), c(color)));
     }
-    cap
-}
 
-fn fader(s: &Mixer, index: usize, height: f32) -> El {
-    let volume = s.config.fader_volumes[index];
-    let muted = s.muted[index];
-    let lit = s.touched_at[index].is_some_and(|at| at.elapsed() < ACTIVITY);
-    let accent = c(ACCENT);
-    let y = handle_y(volume, height);
-    let (top, bottom) = (handle_y(1.0, height), handle_y(0.0, height));
-    let groove_x = z((HANDLE_W - GROOVE_W) / 2.0);
-    let track = el()
-        .key("track")
-        .w(z(HANDLE_W))
-        .h_full()
-        .child(
-            el().key("groove")
-                .size(z(GROOVE_W), bottom - top + z(GROOVE_W))
-                .absolute(groove_x, top - z(GROOVE_W / 2.0))
-                .radius(z(GROOVE_W / 2.0))
-                .fill(c("#0B0B0C"))
-                .border_gradient(1.0, Color::BLACK, c("#3A3A3D")),
-        )
-        .child(el().key("fill").size(z(2.0), (bottom - y).max(0.0)).absolute(z((HANDLE_W - 2.0) / 2.0), y).radius(z(1.0)).fill(if muted { c(DIM) } else { accent }))
-        .child(cap(y))
-        .a11y_hidden();
-    // The thin line on the right, in two segments: both light while the controller moves the
-    // strip, and the lower one glows red while it's muted.
+    // The thin line on the right, in two segments: both light while the controller or a drag
+    // moves the strip, and the lower one glows red while it's muted.
     let split = top + (bottom - top) * 0.42;
-    let segment = |from: f32, to: f32, color: Option<Color>| {
-        let line = el().size(z(2.0), (to - from).max(0.0)).absolute(0.0, from).radius(z(1.0)).fill(color.unwrap_or(c(LED_OFF)));
-        match color {
-            Some(color) => line.box_shadow(glow(color.alpha(0.7), 6.0)),
-            None => line,
+    let mut segment = |from: f32, to: f32, color: Option<Hsla>| {
+        let line = rect(signal_x, from, z(2.0), (to - from).max(0.0));
+        let radius = Corners::all(px(z(1.0)));
+        if let Some(color) = color {
+            window.paint_shadows(line, radius, &[glow(color.alpha(0.7), 6.0)]);
         }
+        window.paint_quad(fill(line, color.unwrap_or(c(LED_OFF))).corner_radii(radius));
     };
-    let upper = segment(top, split - z(3.0), lit.then_some(accent));
-    let lower = segment(split + z(3.0), bottom, if muted { Some(c(RED)) } else { lit.then_some(accent) });
-    // The whole width takes the drag, not just the handle.
-    row()
-        .key(format!("fader-{index}"))
-        .role("slider")
-        .label(format!("Strip {} level", index + 1))
-        .range_value(f64::from(volume), 0.0, 1.0)
-        .range_step(0.01)
-        .a11y_value(decibels(volume))
-        .on_step(move |s: &mut Mixer, steps, _| s.set_volume(index, s.config.fader_volumes[index] + steps as f32 * 0.01))
-        .on_step_limit(move |s: &mut Mixer, max, _| s.set_volume(index, if max { 1.0 } else { 0.0 }))
-        .w_full()
-        .grow(1.0)
-        .min_h(0.0)
-        .justify_center()
-        .gap(z(14.0))
-        .on_drag(move |s: &mut Mixer, d: &mut Drag, tx| match d.phase {
-            Phase::Down => {
-                let at = handle_y(s.config.fader_volumes[index], d.h);
-                if d.clicks == 2 {
-                    // A double press puts the fader back at unity.
-                    s.set_volume(index, 1.0);
-                } else if (d.y - at).abs() > z(HANDLE_H / 2.0) {
-                    // Pressed beside the handle: it jumps there and drags from it.
-                    s.set_volume(index, 1.0 - (d.y - z(FADER_PAD + HANDLE_H / 2.0)) / travel(d.h));
-                }
-                d.data = s.config.fader_volumes[index];
-            }
-            Phase::Move => {
-                s.set_volume(index, d.data - (d.y - d.start_y) / travel(d.h));
-                tx.instant();
-            }
-            Phase::Up => {}
-        })
-        .child(level_lights(volume, height, muted))
-        .child(track)
-        .child(el().key("signal").w(z(2.0)).h_full().child(upper).child(lower).a11y_hidden())
+    segment(top, split - z(3.0), lit.then_some(accent));
+    segment(split + z(3.0), bottom, if muted { Some(c(RED)) } else { lit.then_some(accent) });
 }
 
 /// The control a strip's mute or fader learned, under the power button or the fader. A press
 /// learns a new one; a right-click unbinds it.
-fn binding_chip(s: &Mixer, index: usize, mute: bool) -> El {
+fn binding_chip(s: &Mixer, index: usize, mute: bool, cx: &mut Context<Console>) -> impl IntoElement {
     let learn = if mute { Learn::Mute(index) } else { Learn::Fader(index) };
     let learning = s.learning == Some(learn);
     let bound = if mute { s.config.mute_controls[index] } else { s.config.fader_controls[index] };
@@ -597,97 +781,101 @@ fn binding_chip(s: &Mixer, index: usize, mute: bool) -> El {
         ("Listening…".to_owned(), accent)
     } else {
         match bound {
-            Some(control) => (control.label(), c("#D4D4D7")),
+            Some(control) => (control.label(), c(0xD4D4D7)),
             None => ("Learn".to_owned(), c(FAINT)),
         }
     };
     let kind = if mute { "mute" } else { "fader" };
-    el().key(format!("{kind}-learn-{index}"))
-        .role("button")
-        .label(format!("Learn the {kind} control for strip {}", index + 1))
-        .help(format!(
-            "The {kind} control. Press, then move a fader or press a button on the controller. Right-click to unbind."
-        ))
-        .focusable(true)
+    div()
+        .id(SharedString::from(format!("{kind}-learn-{index}")))
+        .flex()
+        .flex_none()
         .w_full()
-        .h(z(20.0))
-        .px(z(6.0))
-        .center()
-        .radius(z(4.0))
-        .fill(if learning { accent.alpha(0.14) } else { Color::TRANSPARENT })
-        .hover(Color::WHITE.alpha(0.05))
-        .on_press(move |s: &mut Mixer| s.learning = if s.learning == Some(learn) { None } else { Some(learn) })
-        .on_secondary_press(move |s: &mut Mixer, _, _| {
-            let list = if mute { &mut s.config.mute_controls } else { &mut s.config.fader_controls };
-            list[index] = None;
-            s.learning = None;
-            s.schedule_save();
-        })
-        .child(mono(value, 9.5, color).truncate().a11y_hidden())
+        .h(zp(20.0))
+        .px(zp(6.0))
+        .items_center()
+        .justify_center()
+        .rounded(zp(4.0))
+        .when(learning, |chip| chip.bg(accent.alpha(0.14)))
+        .hover(|style| style.bg(gpui::white().alpha(0.05)))
+        .tooltip(tip(format!("The {kind} control. Press, then move a fader or press a button on the controller. Right-click to unbind.")))
+        .on_click(act(cx, move |s| s.learning = if s.learning == Some(learn) { None } else { Some(learn) }))
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |console, _, _, cx| {
+                let mut s = console.mixer.borrow_mut();
+                let list = if mute { &mut s.config.mute_controls } else { &mut s.config.fader_controls };
+                list[index] = None;
+                s.learning = None;
+                s.schedule_save();
+                cx.notify();
+            }),
+        )
+        .child(label(value, 9.5, 500.0, color).min_w(px(0.0)).truncate())
 }
 
-fn footer(s: &Mixer) -> El {
+fn footer(s: &Mixer, cx: &mut Context<Console>) -> impl IntoElement {
     let (status, color) = match (&s.error, s.updates.state()) {
-        (Some(error), _) => (error.clone(), "#FF8A8E"),
-        (None, UpdateState::Failed { message }) => (message, "#FF8A8E"),
-        _ => (format!("{}  ·  {}", s.pipewire_status, s.midi_status), FAINT),
+        (Some(error), _) => (error.clone(), c(0xFF8A8E)),
+        (None, UpdateState::Failed { message }) => (message, c(0xFF8A8E)),
+        _ => (format!("{}  ·  {}", s.pipewire_status, s.midi_status), c(FAINT)),
     };
     let tray = s.config.close_to_tray;
     let knob = z(10.0);
-    row()
-        .key("footer")
-        .h(z(36.0))
+    div()
+        .flex()
+        .flex_none()
+        .h(zp(36.0))
         .w_full()
-        .px(z(14.0))
-        .gap(z(12.0))
-        .center_y()
-        .fill(c(BAR))
-        .child(label(status, 11.0, 400.0, color).grow(1.0).min_w(z(0.0)).truncate())
+        .px(zp(14.0))
+        .gap(zp(12.0))
+        .items_center()
+        .bg(c(BAR))
+        .child(label(status, 11.0, 400.0, color).flex_grow().min_w(px(0.0)).truncate())
         .child(
-            row()
-                .key("tray")
-                .role("switch")
-                .label("Close to tray")
-                .help(if s.tray_available { "Closing the window keeps the mixer running in the tray." } else { "No system tray, so closing the window quits." })
-                .checked(tray)
-                .focusable(true)
-                .h(z(24.0))
-                .px(z(6.0))
-                .gap(z(7.0))
-                .center_y()
-                .radius(z(5.0))
-                .hover(Color::WHITE.alpha(0.05))
-                .on_press(|s: &mut Mixer| {
+            div()
+                .id("tray")
+                .flex()
+                .flex_none()
+                .h(zp(24.0))
+                .px(zp(6.0))
+                .gap(zp(7.0))
+                .items_center()
+                .rounded(zp(5.0))
+                .hover(|style| style.bg(gpui::white().alpha(0.05)))
+                .tooltip(tip(if s.tray_available { "Closing the window keeps the mixer running in the tray." } else { "No system tray, so closing the window quits." }))
+                .on_click(act(cx, |s| {
                     s.config.close_to_tray = !s.config.close_to_tray;
                     s.schedule_save();
-                })
+                }))
                 .child(
-                    el().key("switch")
-                        .size(z(24.0), z(14.0))
-                        .radius(z(7.0))
-                        .fill(if tray { c(ACCENT) } else { c(RAISED) })
-                        .child(el().size(knob, knob).radius(knob / 2.0).absolute(z(if tray { 12.0 } else { 2.0 }), z(2.0)).fill(Color::WHITE))
-                        .a11y_hidden(),
+                    div()
+                        .relative()
+                        .w(zp(24.0))
+                        .h(zp(14.0))
+                        .rounded_full()
+                        .bg(if tray { c(ACCENT) } else { c(RAISED) })
+                        .child(div().absolute().left(px(if tray { z(12.0) } else { z(2.0) })).top(zp(2.0)).size(px(knob)).rounded_full().bg(gpui::white())),
                 )
-                .child(label("Close to tray", 11.0, 500.0, if s.tray_available { DIM } else { FAINT }).a11y_hidden()),
+                .child(label("Close to tray", 11.0, 500.0, if s.tray_available { c(DIM) } else { c(FAINT) })),
         )
         .child(
             bar_button("rescan")
-                .label("Rescan audio and MIDI")
-                .h(z(24.0))
-                .px(z(10.0))
-                .on_press(|s: &mut Mixer| {
+                .h(zp(24.0))
+                .px(zp(10.0))
+                .hover(|style| style.bg(c(0x252527)))
+                .on_click(act(cx, |s| {
                     s.error = None;
                     s.rescan();
                     s.refresh_midi();
-                })
-                .child(label("Rescan", 11.0, 500.0, DIM).a11y_hidden()),
+                }))
+                .child(label("Rescan", 11.0, 500.0, c(DIM))),
         )
 }
 
 /// A strip of the window under the header once an update is installed, or, for a copy that
 /// can't install it, released.
-fn update_banner(s: &Mixer) -> Option<El> {
+fn update_banner(s: &Mixer, cx: &mut Context<Console>) -> Option<impl IntoElement> {
     let (version, ready) = match s.updates.state() {
         UpdateState::Ready { version } => (version, true),
         UpdateState::Available { version } => (version, false),
@@ -704,52 +892,51 @@ fn update_banner(s: &Mixer) -> Option<El> {
     };
     let dismissed = version.clone();
     Some(
-        row()
-            .key("update")
-            .role("status")
-            .h(z(38.0))
+        div()
+            .flex()
+            .flex_none()
+            .h(zp(38.0))
             .w_full()
-            .px(z(14.0))
-            .gap(z(10.0))
-            .center_y()
-            .fill(c("#1E1710"))
-            .child(dot(Some(accent), 6.0).box_shadow(glow(accent.alpha(0.7), 6.0)))
-            .child(label(message, 12.0, 500.0, TEXT).grow(1.0).min_w(z(0.0)).truncate())
+            .px(zp(14.0))
+            .gap(zp(10.0))
+            .items_center()
+            .bg(c(0x1E1710))
+            .child(dot(Some(accent), 6.0).shadow(vec![glow(accent.alpha(0.7), 6.0)]))
+            .child(label(message, 12.0, 500.0, c(TEXT)).flex_grow().min_w(px(0.0)).truncate())
             .child(
-                el().key("update-action")
-                    .role("button")
-                    .label(if ready { "Restart Viper Mixer into the update" } else { "Open the release page" })
-                    .focusable(true)
-                    .h(z(26.0))
-                    .px(z(12.0))
-                    .center()
-                    .radius(z(6.0))
-                    .fill(accent)
-                    .on_press_tx(move |s: &mut Mixer, tx| {
+                div()
+                    .id("update-action")
+                    .flex()
+                    .flex_none()
+                    .h(zp(26.0))
+                    .px(zp(12.0))
+                    .items_center()
+                    .justify_center()
+                    .rounded(zp(6.0))
+                    .bg(accent)
+                    .on_click(cx.listener(move |console, _, _, cx| {
                         if !ready {
-                            if let Err(error) = tx.open_url(RELEASES_URL) {
-                                s.error = Some(format!("Couldn't open the release page: {error}"));
-                            }
-                        } else if s.updates.restart() {
-                            s.menu = None;
-                            s.learning = None;
-                            s.save_now();
-                            tx.quit();
+                            cx.open_url(RELEASES_URL);
+                        } else if console.mixer.borrow().updates.restart() {
+                            console.closing();
+                            console.exit.set(Exit::Quit);
+                            cx.quit();
                         }
-                    })
-                    .child(label(if ready { "Restart" } else { "Download" }, 11.0, 600.0, "#111112").a11y_hidden()),
+                    }))
+                    .child(label(if ready { "Restart" } else { "Download" }, 11.0, 600.0, c(0x111112))),
             )
             .child(
-                el().key("update-dismiss")
-                    .role("button")
-                    .label("Dismiss")
-                    .focusable(true)
-                    .size(z(26.0), z(26.0))
-                    .center()
-                    .radius(z(6.0))
-                    .hover(Color::WHITE.alpha(0.06))
-                    .on_press(move |s: &mut Mixer| s.update_dismissed = Some(dismissed.clone()))
-                    .child(label("×", 14.0, 500.0, DIM).a11y_hidden()),
+                div()
+                    .id("update-dismiss")
+                    .flex()
+                    .flex_none()
+                    .size(zp(26.0))
+                    .items_center()
+                    .justify_center()
+                    .rounded(zp(6.0))
+                    .hover(|style| style.bg(gpui::white().alpha(0.06)))
+                    .on_click(act(cx, move |s| s.update_dismissed = Some(dismissed.clone())))
+                    .child(label("×", 14.0, 500.0, c(DIM))),
             ),
     )
 }
@@ -757,7 +944,7 @@ fn update_banner(s: &Mixer) -> Option<El> {
 /// A menu row: its id, label, light, and whether it's the current choice.
 type MenuItem = (String, String, Option<Health>, bool);
 
-fn menu_panel(s: &Mixer, menu: Menu) -> El {
+fn menu_panel(s: &Mixer, menu: Menu, anchors: &Rc<RefCell<HashMap<String, Bounds<Pixels>>>>, cx: &mut Context<Console>) -> impl IntoElement {
     let (anchor, items): (String, Vec<MenuItem>) = match menu {
         Menu::Assign(index) => {
             let current = s.assignment(index).to_owned();
@@ -792,50 +979,75 @@ fn menu_panel(s: &Mixer, menu: Menu) -> El {
             ("midi-button".to_owned(), items)
         }
     };
-    let mut list = col().key("items").role("menu").gap(1.0).padding(z(4.0));
+    let mut list = div().id("items").flex().flex_col().gap(px(1.0)).p(zp(4.0)).overflow_y_scroll();
     for (position, (id, name, health, chosen)) in items.into_iter().enumerate() {
-        let id = std::rc::Rc::new(id);
         list = list.child(
-            row()
-                .key(format!("item-{position}"))
-                .role("menuitem")
-                .label(name.clone())
-                .checked(chosen)
-                .focusable(true)
-                .h(z(28.0))
-                .px(z(8.0))
-                .gap(z(8.0))
-                .center_y()
-                .radius(z(5.0))
-                .hover(Color::WHITE.alpha(0.06))
-                .on_press(move |s: &mut Mixer| {
+            div()
+                .id(("item", position))
+                .flex()
+                .flex_none()
+                .h(zp(28.0))
+                .px(zp(8.0))
+                .gap(zp(8.0))
+                .items_center()
+                .rounded(zp(5.0))
+                .hover(|style| style.bg(gpui::white().alpha(0.06)))
+                .on_click(act(cx, move |s| {
                     match menu {
                         Menu::Assign(index) => s.assign(index, &id),
                         Menu::Midi => s.choose_port(&id),
                     }
                     s.menu = None;
-                })
+                }))
                 .child(dot(health.map(health_color), 6.0))
-                .child(label(name, 12.0, if chosen { 600.0 } else { 400.0 }, if chosen { TEXT } else { DIM }).grow(1.0).truncate().a11y_hidden())
-                .child(text(if chosen { "✓" } else { "" }).font(font(11.0, 600.0)).color(c(ACCENT)).a11y_hidden()),
+                .child(label(name, 12.0, if chosen { 600.0 } else { 400.0 }, if chosen { c(TEXT) } else { c(DIM) }).flex_grow().min_w(px(0.0)).truncate())
+                .child(label(if chosen { "✓" } else { "" }, 11.0, 600.0, c(ACCENT))),
         );
     }
-    col()
-        .key("menu")
-        .w(z(240.0))
-        .max_h(z(340.0))
-        .radius(z(8.0))
-        .fill(c("#222224"))
-        .border(1.0, c("#3A3A3D"))
-        .shadow(z(8.0), z(24.0), Color::BLACK.alpha(0.6))
-        .clip_rounded(z(8.0))
-        .child(list.scroll(ScrollSpec { stick_bottom: false }).shrink().min_h(0.0))
-        .anchored_fit(anchor, Side::Bottom, Align::Start, z(4.0))
-        .modal(true, |s: &mut Mixer| s.menu = None)
+    let at = anchors.borrow().get(&anchor).copied().unwrap_or_default();
+    anchored().position(point(at.origin.x, at.origin.y + at.size.height + zp(4.0))).snap_to_window_with_margin(zp(8.0)).child(
+        div()
+            .occlude()
+            .flex()
+            .flex_col()
+            .w(zp(240.0))
+            .max_h(zp(340.0))
+            .rounded(zp(8.0))
+            .bg(c(0x222224))
+            .border_1()
+            .border_color(c(0x3A3A3D))
+            .shadow(vec![BoxShadow { color: gpui::black().alpha(0.6), offset: point(px(0.0), zp(8.0)), blur_radius: zp(24.0), spread_radius: px(0.0) }])
+            .overflow_hidden()
+            .child(list),
+    )
 }
 
-/// The state the snapshots show.
-fn demo(s: &mut Mixer) {
+/// The scenes `--demo` can open, for screenshots.
+pub(crate) const SCENES: [&str; 6] = ["default", "assign-menu", "midi-menu", "learning", "update", "disconnected"];
+
+/// The made-up state a `--demo` window shows.
+pub(crate) fn demo(scene: &str) -> Option<Mixer> {
+    let mut s = Mixer::new(Config::default());
+    if scene != "disconnected" {
+        demo_state(&mut s);
+    }
+    match scene {
+        "default" => {}
+        "assign-menu" => s.menu = Some(Menu::Assign(1)),
+        "midi-menu" => s.menu = Some(Menu::Midi),
+        "learning" => s.learning = Some(Learn::Mute(2)),
+        "update" => s.updates.show(UpdateState::Ready { version: "26.12.0".into() }),
+        "disconnected" => {
+            s.pipewire_health = Health::Bad;
+            s.pipewire_status = "PipeWire unavailable · pw-dump isn't installed; install the PipeWire tools".into();
+            s.midi_status = "No MIDI device · plug one in".into();
+        }
+        _ => return None,
+    }
+    Some(s)
+}
+
+fn demo_state(s: &mut Mixer) {
     let stream = |node_id, name: &str, binary: &str, steam, running| AudioStream {
         node_id,
         name: name.into(),
@@ -878,9 +1090,9 @@ mod tests {
 
     #[test]
     fn levels_read_in_decibels() {
-        assert_eq!(decibels(1.0), "0.0 dB");
-        assert_eq!(decibels(0.5), "−18.1 dB");
-        assert_eq!(decibels(0.0), "−∞ dB");
+        assert_eq!(level_number(1.0), "0.0");
+        assert_eq!(level_number(0.5), "−18.1");
+        assert_eq!(level_number(0.0), "−∞");
     }
 
     #[test]
@@ -893,5 +1105,13 @@ mod tests {
     fn the_cap_line_crosses_the_middle() {
         let brightest = (0..CAP_ROWS.len()).max_by_key(|&row| CAP_ROWS[row]).unwrap();
         assert!((brightest as f32 + 0.5 - CAP_ROWS.len() as f32 / 2.0).abs() <= 1.0);
+    }
+
+    #[test]
+    fn every_scene_opens() {
+        for scene in SCENES {
+            assert!(demo(scene).is_some(), "{scene}");
+        }
+        assert!(demo("nope").is_none());
     }
 }

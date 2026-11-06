@@ -61,7 +61,7 @@ struct Shared {
     busy: AtomicBool,
     last_check: Mutex<Option<SystemTime>>,
     /// Wakes the window when the state changes; set by [`Updater::start`].
-    wake: OnceLock<rune::Waker>,
+    wake: OnceLock<crate::signal::Waker>,
 }
 
 /// Checks for and installs updates on background threads; the window reads its state.
@@ -95,7 +95,7 @@ fn installed_appimage() -> Option<PathBuf> {
 
 impl Updater {
     /// Starts the background checks; `wake` wakes the window when the state changes.
-    pub fn start(wake: rune::Waker) -> Self {
+    pub fn start(wake: crate::signal::Waker) -> Self {
         let updater = Self::default();
         let _ = updater.shared.wake.set(wake);
         let shared = Arc::clone(&updater.shared);

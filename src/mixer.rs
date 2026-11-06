@@ -5,6 +5,7 @@ use crate::config::{Config, FADER_COUNT, INPUT, MIDI_DISCONNECTED, MuteMode, OUT
 use crate::engine::{Command, Engine, Event, Target};
 use crate::midi::{self, Message};
 use crate::stream::{self, AudioStream, Graph};
+use crate::updates::Updater;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
@@ -58,6 +59,9 @@ pub(crate) struct Mixer {
     pub touched_at: [Option<Instant>; FADER_COUNT],
     pub tray_available: bool,
     pub error: Option<String>,
+    pub updates: Updater,
+    /// The release whose update banner the user closed this session.
+    pub update_dismissed: Option<String>,
     last_scan: Option<Instant>,
     last_ports: Option<Instant>,
     last_connect: Option<Instant>,
@@ -88,6 +92,8 @@ impl Mixer {
             touched_at: [None; FADER_COUNT],
             tray_available: false,
             error: None,
+            updates: Updater::default(),
+            update_dismissed: None,
             last_scan: None,
             last_ports: None,
             last_connect: None,

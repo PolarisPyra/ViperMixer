@@ -135,7 +135,7 @@ fn scan() -> Result<Graph, String> {
 }
 
 /// Runs a command and returns its output, killing it if it doesn't finish in time.
-fn run_tool(program: &str, arguments: &[&str], timeout: Duration) -> Result<Vec<u8>, String> {
+pub(crate) fn run_tool(program: &str, arguments: &[&str], timeout: Duration) -> Result<Vec<u8>, String> {
     let mut child = Process::new(program)
         .args(arguments)
         .stdin(Stdio::null())
@@ -143,7 +143,10 @@ fn run_tool(program: &str, arguments: &[&str], timeout: Duration) -> Result<Vec<
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| match error.kind() {
-            ErrorKind::NotFound => format!("{program} isn't installed; install the PipeWire tools"),
+            ErrorKind::NotFound if program == "pw-dump" || program == "wpctl" => {
+                format!("{program} isn't installed; install the PipeWire tools")
+            }
+            ErrorKind::NotFound => format!("{program} isn't installed"),
             _ => format!("Could not run {program}: {error}"),
         })?;
     // Both pipes are read on their own threads, so a large dump can't fill one and stall.

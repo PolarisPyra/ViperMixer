@@ -8,6 +8,7 @@ mod mixer;
 mod stream;
 mod tray;
 mod ui;
+mod updates;
 
 use config::Config;
 use mixer::Mixer;
@@ -62,4 +63,11 @@ fn main() {
         });
     }
     app.run();
+    // Restart pressed on the update banner: the new AppImage takes over this process. The lock
+    // and the socket close with it, so the new copy starts as the only one.
+    if let Some(appimage) = updates::restart_target() {
+        use std::os::unix::process::CommandExt;
+        let error = std::process::Command::new(appimage).exec();
+        eprintln!("Couldn't start the update: {error}");
+    }
 }

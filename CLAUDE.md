@@ -23,6 +23,6 @@ Scope: this repo only (Viper Mixer). A bump or release request never covers the 
 ## Development
 
 - Check with `cargo clippy --all-targets` and `cargo test`. CI runs both.
-- Look at the window without a display: `cargo run -- --snap shot.png --scene default` renders demo state; the scenes are listed in `src/ui.rs` (`assign-menu`, `midi-menu`, `learning`, `disconnected`). Write shots under `.scratch/`, which git ignores.
+- Look at the window without a display: `cargo run -- --snap shot.png --scene default` renders demo state; the scenes are listed in `src/ui.rs` (`assign-menu`, `midi-menu`, `learning`, `update`, `disconnected`). Write shots under `.scratch/`, which git ignores.
 - Keep dependencies few. Rune is pinned to a `dev` rev in `Cargo.toml`; `png` and `serde_json` are already in its tree. Add a crate only when the standard library or an existing dependency can't do the job.
 - `assets/logo.png` and `assets/tray.png` are rendered from `assets/logo.svg`; the README says how.

@@ -48,6 +48,10 @@ cargo run --release
   a mute.
 - **Tray.** Closing the window keeps the mixer running in the tray, unless you turn off Close to
   tray in the footer or the desktop has no tray. Opening it again brings the running window back.
+- **Updates.** Shortly after it starts and then every hour, the mixer looks for a new release on
+  GitHub; Check for updates in the footer looks right away. Installed as an AppImage, it downloads
+  the update, checks it, and replaces itself, and a banner offers to restart into it. Built from
+  source, it says a release is out and links to it. It needs `curl`.
 
 Settings live in `~/.config/viper-mixer/config.json`, the same file the previous version used, so
 assignments, levels and mute notes carry over. The older `~/.config/pipewire-mixer/config.json` is
@@ -69,8 +73,8 @@ scripts/build.sh install
 ```
 
 This builds the AppImage and installs it under `~/.local` (`bin/viper-mixer`, the hicolor icon, and
-`share/applications/viper-mixer.desktop`). Set `PREFIX` to install somewhere else. There is no
-self-updater: install a new release the same way, or download it from the releases page.
+`share/applications/viper-mixer.desktop`). Set `PREFIX` to install somewhere else. The
+installed AppImage keeps itself up to date.
 
 ## Regenerating files
 
@@ -116,4 +120,5 @@ Releases follow [docs/release.md](docs/release.md). In short:
 | `src/stream.rs` | Reading apps and devices from `pw-dump` |
 | `src/config.rs` | Settings, including the previous version's |
 | `src/instance.rs`, `src/tray.rs` | One running copy per user, and the tray icon |
+| `src/updates.rs` | Checking GitHub for releases and installing them |
 | `scripts/`, `.github/`, `docs/` | Builds and releases |

@@ -7,6 +7,7 @@ use crate::engine::Engine;
 use crate::midi::{self, Control};
 use crate::mixer::{Health, Learn, Menu, Mixer, port_title};
 use crate::stream::{AudioStream, Device};
+use crate::updates::{RELEASES_URL, UpdateState, Updater};
 use rune::{Align, AppSpec, Color, Cx, Drag, El, Key, KeyEvent, Phase, ScrollSpec, Side, TextStyle, Tx, col, el, row, text};
 use std::time::{Duration, Instant};
 
@@ -20,6 +21,8 @@ const SCALE_W: f32 = 24.0;
 const FADER_GUESS: f32 = 260.0;
 /// Below this strip width the binding chips drop their "Fader" and "Mute" labels.
 const COMPACT_STRIP: f32 = 108.0;
+/// Below this window width the footer's update button says only "Updates".
+const NARROW_WINDOW: f32 = 720.0;
 /// How long a strip's controller light stays on after a message.
 const ACTIVITY: Duration = Duration::from_millis(140);
 /// The fader scale, in dB; the short list is for a short window.
@@ -88,6 +91,7 @@ pub(crate) fn spec() -> AppSpec<Mixer> {
         min_size: Some((560.0, 460.0)),
         setup: Some(|s, waker| {
             if rune::tooling::headless_run().is_none() {
+                s.updates = Updater::start(waker.clone());
                 s.attach(Engine::start(waker));
             }
         }),
@@ -107,6 +111,10 @@ pub(crate) fn spec() -> AppSpec<Mixer> {
                 demo(s);
                 s.learning = Some(Learn::Mute(2));
             }),
+            ("update", |s| {
+                demo(s);
+                s.updates.show(UpdateState::Ready { version: "26.12.0".into() });
+            }),
             ("disconnected", |s| {
                 s.pipewire_health = Health::Bad;
                 s.pipewire_status = "PipeWire unavailable · pw-dump isn't installed; install the PipeWire tools".into();
@@ -119,7 +127,7 @@ pub(crate) fn spec() -> AppSpec<Mixer> {
 
 fn poll(s: &mut Mixer, _: f64, tx: &mut Tx) -> bool {
     let now = Instant::now();
-    let mut changed = s.drain(now);
+    let mut changed = s.drain(now) | s.updates.take_changed();
     let mut next = s.tick(now);
     for slot in &mut s.touched_at {
         if let Some(at) = *slot {
@@ -159,6 +167,7 @@ fn view(s: &Mixer, cx: &mut Cx<Mixer>) -> El {
     // Every fader is as tall as the first, and every strip as wide.
     let fader_h = cx.layout_size("fader-0").map_or(FADER_GUESS, |[_, h]| h);
     let compact = cx.layout_with("strip-0", |r| r[2] < COMPACT_STRIP).unwrap_or(false);
+    let narrow = cx.layout_with("window", |r| r[2] < NARROW_WINDOW).unwrap_or(false);
     let mut strips = row().key("strips").grow(1.0).w_full().px(6.0).min_h(0.0);
     for index in 0..FADER_COUNT {
         if index > 0 {
@@ -172,9 +181,11 @@ fn view(s: &Mixer, cx: &mut Cx<Mixer>) -> El {
         .w_full()
         .h_full()
         .fill(c(BG))
-        .child(header(s))
-        .child(strips)
-        .child(footer(s));
+        .child(header(s));
+    if let Some(banner) = update_banner(s) {
+        root = root.child(banner);
+    }
+    root = root.child(strips).child(footer(s, narrow));
     if let Some(menu) = s.menu {
         root = root
             .child(el().key("scrim").role("none").absolute(0.0, 0.0).w_full().h_full().on_press(|s: &mut Mixer| s.menu = None))
@@ -226,6 +237,7 @@ fn header(s: &Mixer) -> El {
         .fill(c(PANEL))
         .child(logo())
         .child(label("Viper Mixer", 14.0, 650.0, TEXT))
+        .child(label(env!("CARGO_PKG_VERSION"), 11.0, 500.0, FAINT))
         .child(el().grow(1.0))
         .child(
             row()
@@ -458,10 +470,21 @@ fn binding_chip(s: &Mixer, index: usize, mute: bool, accent: Color, compact: boo
     chip.child(mono(value, 9.5, color).grow(1.0).align(Align::End).truncate().a11y_hidden())
 }
 
-fn footer(s: &Mixer) -> El {
-    let (status, color) = match &s.error {
-        Some(error) => (error.clone(), "#FF8A8E"),
-        None => (format!("{}  ·  {}", s.pipewire_status, s.midi_status), FAINT),
+fn footer(s: &Mixer, narrow: bool) -> El {
+    let update = s.updates.state();
+    let (status, color) = match (&s.error, &update) {
+        (Some(error), _) => (error.clone(), "#FF8A8E"),
+        (None, UpdateState::Failed { message }) => (message.clone(), "#FF8A8E"),
+        _ => (format!("{}  ·  {}", s.pipewire_status, s.midi_status), FAINT),
+    };
+    let checking = matches!(update, UpdateState::Checking | UpdateState::Downloading { .. });
+    let updates_label = match &update {
+        UpdateState::Checking => "Checking…".to_owned(),
+        UpdateState::UpToDate => "Up to date".to_owned(),
+        UpdateState::Downloading { percent: Some(percent), .. } => format!("Downloading {percent}%"),
+        UpdateState::Downloading { percent: None, .. } => "Downloading…".to_owned(),
+        _ if narrow => "Updates".to_owned(),
+        _ => "Check for updates".to_owned(),
     };
     let mode = |name: &'static str, mode: MuteMode| {
         let on = s.config.mute_mode == mode;
@@ -550,6 +573,94 @@ fn footer(s: &Mixer) -> El {
                 })
                 .child(label("Rescan", 11.0, 500.0, DIM).a11y_hidden()),
         )
+        .child(
+            el().key("updates")
+                .role("button")
+                .label(format!("Check for updates to Viper Mixer {}", env!("CARGO_PKG_VERSION")))
+                .a11y_value(updates_label.clone())
+                .focusable(!checking)
+                .h(26.0)
+                .px(10.0)
+                .center()
+                .radius(6.0)
+                .border(1.0, c(HAIR))
+                .hover(Color::WHITE.alpha(if checking { 0.0 } else { 0.04 }))
+                .on_press(move |s: &mut Mixer| {
+                    if !checking {
+                        s.updates.check_now();
+                    }
+                })
+                .child(label(updates_label, 11.0, 500.0, DIM).a11y_hidden()),
+        )
+}
+
+/// A strip of the window under the header once an update is installed, or, for a copy that
+/// can't install it, released.
+fn update_banner(s: &Mixer) -> Option<El> {
+    let (version, ready) = match s.updates.state() {
+        UpdateState::Ready { version } => (version, true),
+        UpdateState::Available { version } => (version, false),
+        _ => return None,
+    };
+    if s.update_dismissed.as_deref() == Some(version.as_str()) {
+        return None;
+    }
+    let accent = c(ACCENTS[0]);
+    let message = if ready {
+        format!("Viper Mixer {version} is installed. Restart to use it.")
+    } else {
+        format!("Viper Mixer {version} is out.")
+    };
+    let dismissed = version.clone();
+    Some(
+        row()
+            .key("update")
+            .role("status")
+            .h(38.0)
+            .w_full()
+            .px(16.0)
+            .gap(10.0)
+            .center_y()
+            .fill(accent.alpha(0.08))
+            .child(dot(Some(accent), 6.0))
+            .child(label(message, 12.0, 500.0, TEXT).grow(1.0).min_w(0.0).truncate())
+            .child(
+                el().key("update-action")
+                    .role("button")
+                    .label(if ready { "Restart Viper Mixer into the update" } else { "Open the release page" })
+                    .focusable(true)
+                    .h(26.0)
+                    .px(12.0)
+                    .center()
+                    .radius(6.0)
+                    .fill(accent)
+                    .on_press_tx(move |s: &mut Mixer, tx| {
+                        if !ready {
+                            if let Err(error) = tx.open_url(RELEASES_URL) {
+                                s.error = Some(format!("Couldn't open the release page: {error}"));
+                            }
+                        } else if s.updates.restart() {
+                            s.menu = None;
+                            s.learning = None;
+                            s.save_now();
+                            tx.quit();
+                        }
+                    })
+                    .child(label(if ready { "Restart" } else { "Download" }, 11.0, 600.0, "#0E1014").a11y_hidden()),
+            )
+            .child(
+                el().key("update-dismiss")
+                    .role("button")
+                    .label("Dismiss")
+                    .focusable(true)
+                    .size(26.0, 26.0)
+                    .center()
+                    .radius(6.0)
+                    .hover(Color::WHITE.alpha(0.06))
+                    .on_press(move |s: &mut Mixer| s.update_dismissed = Some(dismissed.clone()))
+                    .child(label("×", 14.0, 500.0, DIM).a11y_hidden()),
+            ),
+    )
 }
 
 /// A menu row: its id, label, light, and whether it's the current choice.

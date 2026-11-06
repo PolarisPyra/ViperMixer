@@ -10,7 +10,7 @@ use crate::mixer::{Health, Learn, Menu, Mixer, port_title};
 use crate::stream::{AudioStream, Device};
 use crate::updates::{RELEASES_URL, UpdateState, Updater};
 use rune::{
-    Align, AppSpec, Color, Cx, Drag, El, Key, KeyEvent, LineCap, Phase, ScrollSpec, Shadow, Shape, Side, TextStyle, Tx, col, el,
+    Align, AppSpec, Color, Cx, Drag, El, Key, KeyEvent, LineCap, Phase, ScrollSpec, Shadow, Shape, Side, Span, TextStyle, Tx, col, el,
     row, text,
 };
 use std::time::{Duration, Instant};
@@ -62,6 +62,19 @@ fn label(content: impl Into<String>, size: f32, weight: f32, color: &str) -> El 
 
 fn mono(content: impl Into<String>, size: f32, color: Color) -> El {
     text(content.into()).font(TextStyle::new(size, 500.0).mono()).color(color)
+}
+
+/// One line of text in parts of different sizes, weights and colours, sharing a baseline: a
+/// level and its unit, say. `base` sets the line's height and font features.
+fn runs(base: TextStyle, parts: &[(&str, f32, f32, &str)]) -> El {
+    let mut content = String::new();
+    let mut spans = Vec::new();
+    for &(part, size, weight, color) in parts {
+        let start = content.len();
+        content.push_str(part);
+        spans.push(Span::new(start, content.len()).size(size).weight(weight).color(c(color)));
+    }
+    text(content).font(base).spans(spans)
 }
 
 fn health_color(health: Health) -> Color {
@@ -274,8 +287,10 @@ fn header(s: &Mixer, narrow: bool) -> El {
         .center_y()
         .fill(c(BAR))
         .child(logo())
-        .child(label("Viper Mixer", 13.5, 650.0, TEXT))
-        .child(label(env!("CARGO_PKG_VERSION"), 11.0, 500.0, FAINT))
+        .child(runs(
+            TextStyle::new(13.5, 650.0),
+            &[("Viper Mixer", 13.5, 650.0, TEXT), (concat!("   ", env!("CARGO_PKG_VERSION")), 11.0, 500.0, FAINT)],
+        ))
         .child(el().grow(1.0))
         .child(
             row()
@@ -306,8 +321,7 @@ fn header(s: &Mixer, narrow: bool) -> El {
                 .hover(Color::WHITE.alpha(0.05))
                 .on_press(|s: &mut Mixer| s.menu = if s.menu == Some(Menu::Midi) { None } else { Some(Menu::Midi) })
                 .child(dot(Some(health_color(s.midi_health())), 6.0))
-                .child(label("MIDI", 10.0, 600.0, FAINT))
-                .child(label(port, 12.0, 500.0, TEXT).grow(1.0).truncate())
+                .child(runs(TextStyle::new(12.0, 500.0), &[("MIDI   ", 10.0, 600.0, FAINT), (&port, 12.0, 500.0, TEXT)]).grow(1.0).truncate())
                 .child(label("▾", 10.0, 500.0, FAINT)),
         )
         .child(
@@ -354,8 +368,10 @@ fn strip(s: &Mixer, index: usize, fader_h: f32) -> El {
                 .justify_center()
                 .items_center()
                 .gap(3.0)
-                .child(text(level_number(s.config.fader_volumes[index])).font(TextStyle::new(12.0, 600.0).features("'tnum' 1")).color(c(TEXT)))
-                .child(label("dB", 9.5, 500.0, FAINT)),
+                .child(runs(
+                    TextStyle::new(12.0, 600.0).features("'tnum' 1"),
+                    &[(&level_number(s.config.fader_volumes[index]), 12.0, 600.0, TEXT), (" dB", 9.5, 500.0, FAINT)],
+                )),
         )
         .child(
             col()

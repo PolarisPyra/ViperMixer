@@ -2,7 +2,7 @@
 //! level, a fader, a mute button and the controller bindings it learned. Everything stretches with
 //! the window; the faders take the height.
 
-use crate::config::{FADER_COUNT, INPUT, MIDI_DISCONNECTED, MuteMode, OUTPUT, STEAM_ALL};
+use crate::config::{FADER_COUNT, INPUT, MIDI_DISCONNECTED, OUTPUT, STEAM_ALL};
 use crate::engine::Engine;
 use crate::midi::{self, Control};
 use crate::mixer::{Health, Learn, Menu, Mixer, port_title};
@@ -486,25 +486,6 @@ fn footer(s: &Mixer, narrow: bool) -> El {
         _ if narrow => "Updates".to_owned(),
         _ => "Check for updates".to_owned(),
     };
-    let mode = |name: &'static str, mode: MuteMode| {
-        let on = s.config.mute_mode == mode;
-        el().key(name)
-            .role("radio")
-            .label(format!("{name} mute buttons"))
-            .checked(on)
-            .focusable(true)
-            .h(22.0)
-            .px(9.0)
-            .center()
-            .radius(4.0)
-            .fill(if on { c(HAIR) } else { Color::TRANSPARENT })
-            .hover(Color::WHITE.alpha(0.04))
-            .on_press(move |s: &mut Mixer| {
-                s.config.mute_mode = mode;
-                s.schedule_save();
-            })
-            .child(label(name, 11.0, 500.0, if on { TEXT } else { DIM }).a11y_hidden())
-    };
     let tray = s.config.close_to_tray;
     let knob = 10.0;
     row()
@@ -543,17 +524,6 @@ fn footer(s: &Mixer, narrow: bool) -> El {
                         .a11y_hidden(),
                 )
                 .child(label("Close to tray", 11.0, 500.0, if s.tray_available { DIM } else { FAINT }).a11y_hidden()),
-        )
-        .child(
-            row()
-                .key("mute-mode")
-                .role("radiogroup")
-                .label("Mute buttons")
-                .padding(2.0)
-                .radius(6.0)
-                .border(1.0, c(HAIR))
-                .child(mode("Latch", MuteMode::Latch))
-                .child(mode("Toggle", MuteMode::Toggle)),
         )
         .child(
             el().key("rescan")

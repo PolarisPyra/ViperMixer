@@ -1,7 +1,7 @@
 //! The mixer's state and what changes it: PipeWire scans, the MIDI controller, and the strips.
 //! The view in `ui` reads it and calls back in.
 
-use crate::config::{Config, FADER_COUNT, INPUT, MIDI_DISCONNECTED, MuteMode, OUTPUT, STEAM_ALL};
+use crate::config::{Config, FADER_COUNT, INPUT, MIDI_DISCONNECTED, OUTPUT, STEAM_ALL};
 use crate::engine::{Command, Engine, Event, Target};
 use crate::midi::{self, Message};
 use crate::stream::{self, AudioStream, Graph};
@@ -586,11 +586,8 @@ impl Mixer {
             }
             if self.config.mute_controls[index].is_some_and(|control| message.is(&control)) {
                 self.touched_at[index] = Some(now);
-                match self.config.mute_mode {
-                    MuteMode::Latch => self.set_muted(index, message.pressed()),
-                    MuteMode::Toggle if message.pressed() => self.set_muted(index, !self.muted[index]),
-                    MuteMode::Toggle => {}
-                }
+                // The strip follows the button: down is muted, up is not.
+                self.set_muted(index, message.pressed());
             }
         }
     }
@@ -652,19 +649,13 @@ mod tests {
     }
 
     #[test]
-    fn mute_buttons_latch_or_toggle() {
+    fn mute_buttons_latch() {
         let mut mixer = mixer_with(vec![]);
         let now = Instant::now();
         mixer.handle_midi(&[0x90, 37, 100], now);
         assert!(mixer.muted[0]);
         mixer.handle_midi(&[0x90, 37, 0], now);
         assert!(!mixer.muted[0], "a latching switch follows the note off");
-        mixer.config.mute_mode = MuteMode::Toggle;
-        mixer.handle_midi(&[0x90, 37, 100], now);
-        mixer.handle_midi(&[0x80, 37, 0], now);
-        assert!(mixer.muted[0], "a momentary button flips on its press only");
-        mixer.handle_midi(&[0x90, 37, 100], now);
-        assert!(!mixer.muted[0]);
     }
 
     #[test]

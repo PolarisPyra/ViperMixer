@@ -37,8 +37,7 @@ cargo run --release
   fader or press a button on the controller to bind it, by channel. Right-click one to unbind it.
   A control bound to one strip comes off any other. Out of the box, faders are CC 1–5 and mutes
   are notes 37–41 on any channel.
-- **Mute modes.** Latch follows a switch (down mutes, up unmutes); Toggle flips on each press of a
-  button that springs back.
+- **Mutes follow the switch.** Down mutes the strip and up unmutes it.
 - **Hardware that comes and goes.** The controller is remembered by name without ALSA's port
   numbers, so it reconnects after you unplug it, plug it into another USB port, or reboot.
   Automatic picks the first hardware input and skips MIDI Through and virtual ports. Strips on

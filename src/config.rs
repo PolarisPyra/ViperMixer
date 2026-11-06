@@ -15,15 +15,6 @@ pub(crate) const MIDI_DISCONNECTED: &str = "__disconnected__";
 /// Where a strip starts before it has a saved level.
 const DEFAULT_VOLUME: f32 = 0.5;
 
-/// How a mute button drives its strip.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MuteMode {
-    /// The strip follows the button: down is muted, up is not. For latching switches.
-    Latch,
-    /// Each press flips the strip. For buttons that spring back.
-    Toggle,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Config {
     pub applications: Vec<String>,
@@ -33,7 +24,6 @@ pub(crate) struct Config {
     pub midi_port: String,
     pub fader_controls: Vec<Option<Control>>,
     pub mute_controls: Vec<Option<Control>>,
-    pub mute_mode: MuteMode,
     pub fader_volumes: Vec<f32>,
     pub close_to_tray: bool,
 }
@@ -91,10 +81,6 @@ impl Config {
                 |index| Some(Control::cc(index as u8 + 1)),
             ),
             mute_controls,
-            mute_mode: match object.get("mute_mode").and_then(Value::as_str) {
-                Some("toggle") => MuteMode::Toggle,
-                _ => MuteMode::Latch,
-            },
             fader_volumes: fixed(
                 object.get("fader_volumes"),
                 |value| value.as_f64().map(|volume| volume as f32).filter(|volume| volume.is_finite()).map(|volume| volume.clamp(0.0, 1.0)),
@@ -115,7 +101,6 @@ impl Config {
                 .collect::<Vec<_>>(),
             "fader_controls": self.fader_controls.iter().map(control_to).collect::<Vec<_>>(),
             "mute_controls": self.mute_controls.iter().map(control_to).collect::<Vec<_>>(),
-            "mute_mode": match self.mute_mode { MuteMode::Latch => "latch", MuteMode::Toggle => "toggle" },
             "fader_volumes": self.fader_volumes,
             "close_to_tray": self.close_to_tray,
         })
@@ -205,7 +190,6 @@ mod tests {
         assert_eq!(config.fader_controls[4], Some(Control::cc(5)));
         assert_eq!(config.fader_volumes, [0.25, 1.0, 0.5, 0.5, 0.5]);
         assert!(!config.close_to_tray);
-        assert_eq!(config.mute_mode, MuteMode::Latch);
     }
 
     #[test]
@@ -213,7 +197,6 @@ mod tests {
         let mut config = Config::default();
         config.bind(2, false, Control { channel: Some(9), ..Control::cc(70) });
         config.fader_controls[0] = None;
-        config.mute_mode = MuteMode::Toggle;
         config.midi_port = MIDI_DISCONNECTED.into();
         assert_eq!(Config::from_value(&config.to_value()), config);
     }

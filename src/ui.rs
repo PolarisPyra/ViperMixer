@@ -10,10 +10,11 @@ use crate::mixer::{Health, Learn, Menu, Mixer, port_title};
 use crate::stream::{AudioStream, Device};
 use crate::updates::{RELEASES_URL, UpdateState, Updater};
 use rune::{
-    Align, AppSpec, Color, Cx, Drag, El, Key, KeyEvent, LineCap, Phase, ScrollSpec, Shadow, Shape, Side, Span, Spring, TextStyle, Tx, col, el,
+    Align, AppSpec, Color, Cx, Drag, El, ImageCache, Key, KeyEvent, LineCap, Phase, Pixels, ScrollSpec, Shadow, Shape, Side, Span, Spring, TextStyle, Tx, col, el,
     row, text,
 };
 use std::cell::Cell;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Space above and below the fader's travel.
@@ -236,29 +237,17 @@ fn view(s: &Mixer, cx: &mut Cx<Mixer>) -> El {
 }
 
 fn logo() -> El {
-    // The app icon, drawn small: a dark console with three lit knobs and three faders.
-    let mut lights = row().key("lights").gap(z(2.0)).absolute(z(5.0), z(1.5));
-    let mut faders = row().key("faders").gap(z(3.0)).absolute(z(5.5), z(10.0));
-    for (index, top) in [6.0, 2.0, 4.0].into_iter().enumerate() {
-        lights = lights.child(dot(Some(c(ACCENT)), 4.0));
-        faders = faders.child(
-            el().key(format!("slot{index}"))
-                .size(z(3.0), z(11.0))
-                .radius(z(1.5))
-                .fill(c("#0B0B0C"))
-                .child(el().size(z(1.0), z(11.0 - top - 3.0)).absolute(z(1.0), z(top + 3.0)).fill(c(ACCENT)))
-                .child(el().size(z(5.0), z(3.0)).radius(z(1.0)).absolute(z(-1.0), z(top)).fill(c("#DCDCDF"))),
-        );
+    thread_local! {
+        /// The app icon, from `assets/logo.png` (see the README for regenerating it), decoded
+        /// once with mips so it stays sharp at every zoom. It draws as one picture, so its
+        /// parts can't snap apart while the window resizes.
+        static LOGO: Pixels = {
+            let image = ImageCache::new(Arc::new(|| {})).load(&include_bytes!("../assets/logo.png")[..]);
+            let _ = image.wait();
+            image.pixels().clone()
+        };
     }
-    el().key("logo")
-        .size(z(24.0), z(24.0))
-        .radius(z(6.0))
-        .gradient(c("#2F2F32"), c("#222224"))
-        .clip_rounded(z(6.0))
-        .child(el().size(z(24.0), z(7.0)).absolute(0.0, 0.0).fill(c("#111112")))
-        .child(lights)
-        .child(faders)
-        .a11y_hidden()
+    LOGO.with(|logo| el().key("logo").size(z(24.0), z(24.0)).pixels(logo).a11y_hidden())
 }
 
 /// A bordered button on one of the black bars.

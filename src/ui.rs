@@ -258,6 +258,7 @@ fn bar_button(key: &str) -> El {
 }
 
 fn header(s: &Mixer, narrow: bool) -> El {
+    let health = health_color(s.pipewire_health);
     let port = if s.connected_port.is_empty() {
         match s.config.midi_port.as_str() {
             "" => "Automatic".to_owned(),
@@ -295,11 +296,14 @@ fn header(s: &Mixer, narrow: bool) -> El {
         .child(
             row()
                 .key("pipewire")
-                .gap(6.0)
-                .center_y()
+                .h(24.0)
+                .px(10.0)
+                .center()
+                .radius(12.0)
+                .fill(health.alpha(0.1))
+                .border(1.0, health)
                 .help(s.pipewire_status.clone())
-                .child(dot(Some(health_color(s.pipewire_health)), 6.0))
-                .child(label("PipeWire", 11.0, 500.0, DIM)),
+                .child(text("PipeWire").font(TextStyle::new(11.0, 600.0)).color(health)),
         )
         .child(
             row()
@@ -488,50 +492,29 @@ fn level_lights(volume: f32, height: f32, muted: bool) -> El {
     lights
 }
 
-/// The bands of a fader cap from top to bottom, as (height, colour): chrome ribs that brighten
-/// towards the white line across the middle, the way light catches a console fader. They add up
-/// to `HANDLE_H`.
-const CAP_BANDS: [(f32, &str); 19] = [
-    (4.0, "#6E6E72"),
-    (2.0, "#BDBDC1"),
-    (2.0, "#4E4E52"),
-    (2.0, "#CACACD"),
-    (2.0, "#434347"),
-    (2.0, "#D6D6D9"),
-    (3.0, "#38383C"),
-    (3.0, "#E8E8EA"),
-    (2.0, "#2A2A2D"),
-    (4.0, "#FFFFFF"),
-    (2.0, "#2A2A2D"),
-    (3.0, "#F2F2F4"),
-    (2.0, "#323235"),
-    (3.0, "#E2E2E5"),
-    (2.0, "#3C3C40"),
-    (3.0, "#D2D2D5"),
-    (2.0, "#46464A"),
-    (3.0, "#BFBFC3"),
-    (2.0, "#5E5E62"),
+/// A fader cap's rows from top to bottom, one pixel each, taken from the reference console: a
+/// lit top face, fine ribs either side of a white line across the middle, and a black bottom
+/// face. There are `HANDLE_H` of them.
+const CAP_ROWS: [&str; 48] = [
+    "#444444", "#969696", "#828282", "#888888", "#868686", "#848484", "#999999", "#292929",
+    "#000000", "#292929", "#5E5E5E", "#0C0C0C", "#222222", "#161616", "#6B6B6B", "#5F5F5F",
+    "#1A1A1A", "#2F2F2F", "#3A3A3A", "#8E8E8E", "#5B5B5B", "#2B2B2B", "#636363", "#E1E1E1",
+    "#DEDEDE", "#C5C5C5", "#484848", "#5E5E5E", "#1C1C1C", "#131313", "#6C6C6C", "#636363",
+    "#737373", "#101010", "#505050", "#7D7D7D", "#7D7D7D", "#737373", "#2D2D2D", "#828282",
+    "#9B9B9B", "#363636", "#080808", "#111111", "#111111", "#111111", "#111111", "#111111",
 ];
 
-/// A fader cap: a block of chrome bands with a white line across its middle.
+/// A fader cap: a flat block of grey ribs with a white line across its middle.
 fn cap(y: f32) -> El {
     let mut cap = el()
         .key("handle")
         .size(HANDLE_W, HANDLE_H)
         .absolute(0.0, y - HANDLE_H / 2.0)
-        .radius(2.0)
-        .clip_rounded(2.0)
-        .shadow(4.0, 8.0, Color::BLACK.alpha(0.7));
-    let mut at = 0.0;
-    for (height, color) in CAP_BANDS {
-        cap = cap.child(el().size(HANDLE_W, height).absolute(0.0, at).fill(c(color)));
-        at += height;
+        .box_shadow(Shadow { x: 0.0, y: 1.0, blur: 3.0, spread: 1.0, color: Color::BLACK.alpha(0.6), inset: false });
+    for (row, color) in CAP_ROWS.iter().enumerate() {
+        cap = cap.child(el().size(HANDLE_W, 1.0).absolute(0.0, row as f32).fill(c(color)));
     }
-    // Darker sides round the block off.
-    cap.child(el().size(HANDLE_W, HANDLE_H).absolute(0.0, 0.0).linear_gradient(
-        std::f32::consts::FRAC_PI_2,
-        [(0.0, Color::BLACK.alpha(0.35)), (0.18, Color::TRANSPARENT), (0.82, Color::TRANSPARENT), (1.0, Color::BLACK.alpha(0.35))],
-    ))
+    cap
 }
 
 fn fader(s: &Mixer, index: usize, height: f32) -> El {
@@ -911,9 +894,9 @@ mod tests {
     }
 
     #[test]
-    fn the_cap_bands_fill_the_cap_and_centre_its_line() {
-        assert_eq!(CAP_BANDS.iter().map(|(height, _)| height).sum::<f32>(), HANDLE_H);
-        let above: f32 = CAP_BANDS.iter().take_while(|(_, color)| *color != "#FFFFFF").map(|(height, _)| height).sum();
-        assert_eq!(above + 2.0, HANDLE_H / 2.0);
+    fn the_cap_rows_fill_the_cap_and_centre_its_line() {
+        assert_eq!(CAP_ROWS.len() as f32, HANDLE_H);
+        let brightest = (0..CAP_ROWS.len()).max_by_key(|&row| CAP_ROWS[row]).unwrap();
+        assert!((brightest as f32 - HANDLE_H / 2.0).abs() <= 1.0);
     }
 }

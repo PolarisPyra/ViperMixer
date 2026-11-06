@@ -14,13 +14,3 @@ midir = "0.10"
 # Both are already in Rune's dependency tree, so they add nothing to the build.
 png = "0.18"
 serde_json = "1"
-
-[profile.release]
-lto = "thin"
-codegen-units = 1
-
-# Shipped builds (scripts/build.sh) trade a slower link for a smaller, faster binary.
-[profile.dist]
-inherits = "release"
-lto = "fat"
-strip = true

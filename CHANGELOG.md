@@ -3,6 +3,16 @@
 All notable changes to Viper Mixer are documented here, for the people who use it.
 Each release adds its notes at the top; see docs/release.md.
 
+## [26.11.0] - 2026-11-06
+
+### Added
+
+- Viper Mixer checks for updates shortly after it starts and then every hour, and Check for updates in the footer checks right away. Installed as an AppImage, it downloads and checks the new version itself, and a banner under the header offers to restart into it.
+
+### Changed
+
+- Viper Mixer has been rebuilt with a new look and a new logo. Each strip now learns its fader and its mute button from your controller, can drive your output device or microphone, and finds your controller again after you replug it.
+
 ## [0.5.3] - 2026-10-24
 
 ### Fixed
@@ -76,5 +86,3 @@ Each release adds its notes at the top; see docs/release.md.
 - Speed up mixer startup
 - Keep mixer running when window closes
 - Logo
-
-

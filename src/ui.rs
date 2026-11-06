@@ -29,8 +29,8 @@ const MUTE_CELL_H: f32 = 92.0;
 const LEVEL_H: f32 = 26.0;
 /// The fader's height before the first layout measures it.
 const FADER_GUESS: f32 = 260.0;
-/// Below this window width the header's update button says only "Updates".
-const NARROW_WINDOW: f32 = 720.0;
+/// Wide enough for the update button's longest label, so the header doesn't shift as it changes.
+const UPDATES_W: f32 = 124.0;
 /// How long a strip's controller light stays on after a message.
 const ACTIVITY: Duration = Duration::from_millis(140);
 
@@ -191,7 +191,6 @@ pub(crate) fn on_close(s: &mut Mixer, tx: &mut Tx) {
 fn view(s: &Mixer, cx: &mut Cx<Mixer>) -> El {
     // Every fader is as tall as the first.
     let fader_h = cx.layout_size("fader-0").map_or(FADER_GUESS, |[_, h]| h);
-    let narrow = cx.layout_with("window", |r| r[2] < NARROW_WINDOW).unwrap_or(false);
     // The gaps between strips, and between the bars, show the lines.
     let mut strips = row().key("strips").grow(1.0).w_full().min_h(0.0).gap(1.0);
     for index in 0..FADER_COUNT {
@@ -204,7 +203,7 @@ fn view(s: &Mixer, cx: &mut Cx<Mixer>) -> El {
         .h_full()
         .gap(1.0)
         .fill(c(LINE))
-        .child(header(s, narrow));
+        .child(header(s));
     if let Some(banner) = update_banner(s) {
         root = root.child(banner);
     }
@@ -257,7 +256,7 @@ fn bar_button(key: &str) -> El {
         .hover(Color::WHITE.alpha(0.05))
 }
 
-fn header(s: &Mixer, narrow: bool) -> El {
+fn header(s: &Mixer) -> El {
     let health = health_color(s.pipewire_health);
     let port = if s.connected_port.is_empty() {
         match s.config.midi_port.as_str() {
@@ -276,7 +275,6 @@ fn header(s: &Mixer, narrow: bool) -> El {
         UpdateState::UpToDate => "Up to date".to_owned(),
         UpdateState::Downloading { percent: Some(percent), .. } => format!("Downloading {percent}%"),
         UpdateState::Downloading { percent: None, .. } => "Downloading…".to_owned(),
-        _ if narrow => "Updates".to_owned(),
         _ => "Check for updates".to_owned(),
     };
     row()
@@ -330,6 +328,7 @@ fn header(s: &Mixer, narrow: bool) -> El {
         )
         .child(
             bar_button("updates")
+                .w(UPDATES_W)
                 .label(format!("Check for updates to Viper Mixer {}", env!("CARGO_PKG_VERSION")))
                 .a11y_value(updates_label.clone())
                 .focusable(!checking)

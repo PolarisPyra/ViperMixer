@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Builds Viper Mixer. `appimage` writes Viper-Mixer-x86_64.AppImage. `install` builds the release
-# binary and installs it under $PREFIX (default ~/.local) with its icon and a launcher.
+# Builds Viper Mixer. `appimage` writes Viper-Mixer-x86_64.AppImage. `install` builds the AppImage
+# and installs it as $PREFIX/bin/viper-mixer (default ~/.local) with its icon and a launcher.
 #
 # Usage: scripts/build.sh appimage | install
 set -euo pipefail
@@ -18,13 +18,13 @@ usage() {
 Usage: scripts/build.sh appimage | install
 
   appimage  Build target/appimage/Viper-Mixer-x86_64.AppImage
-  install   Build the release binary and install it under $PREFIX (default ~/.local):
-            bin/viper-midi-mixer, the icon, and share/applications/viper-midi-mixer.desktop
+  install   Build the AppImage and install it under $PREFIX (default ~/.local): bin/viper-mixer,
+            the icon, and share/applications/viper-mixer.desktop
 EOF
 }
 
 # The launcher's name matches the app id the window reports, so the desktop shows its icon.
-app_id="viper-midi-mixer"
+app_id="viper-mixer"
 version="$(awk -F '"' '/^version = / { print $2; exit }' Cargo.toml)"
 
 require_tools() {
@@ -38,11 +38,12 @@ build_appimage() {
   require_tools cargo curl
   [[ "$(uname -m)" == x86_64 ]] || die "AppImage packaging supports x86_64; detected $(uname -m)."
 
-  local tools_dir="${XDG_CACHE_HOME:-$HOME/.cache}/viper-midi-mixer/appimage-tools"
+  local tools_dir="${XDG_CACHE_HOME:-$HOME/.cache}/viper-mixer/appimage-tools"
   local linuxdeploy="$tools_dir/linuxdeploy-x86_64.AppImage"
   local appimage_dir="$repo_root/target/appimage"
   local appdir="$appimage_dir/AppDir"
   local out="$appimage_dir/Viper-Mixer-x86_64.AppImage"
+  local appimage_desktop="$appimage_dir/viper-mixer.desktop"
 
   mkdir -p "$tools_dir" "$appimage_dir"
   if [[ ! -x "$linuxdeploy" ]]; then
@@ -52,19 +53,18 @@ build_appimage() {
     chmod +x "$linuxdeploy"
   fi
 
-  cargo build --release --locked
+  cargo build --profile dist
   rm -rf "$appdir"
   # linuxdeploy matches the desktop file's Icon= name against the icon file name.
-  local icon="$appimage_dir/$app_id.png"
-  cp assets/logo.png "$icon"
+  sed 's|^Icon=.*|Icon=logo|' packaging/viper-mixer.desktop > "$appimage_desktop"
 
   (
     cd "$appimage_dir"
     LDAI_OUTPUT="$out" LDAI_VERSION="$version" APPIMAGE_EXTRACT_AND_RUN=1 "$linuxdeploy" \
       --appdir "$appdir" \
-      --executable "$repo_root/target/release/viper-midi-mixer" \
-      --desktop-file "$repo_root/packaging/viper-midi-mixer.desktop" \
-      --icon-file "$icon" \
+      --executable "$repo_root/target/dist/viper-mixer" \
+      --desktop-file "$appimage_desktop" \
+      --icon-file "$repo_root/assets/logo.png" \
       --output appimage
   )
   [[ -f "$out" ]] || die "Expected $out after the build."
@@ -72,17 +72,18 @@ build_appimage() {
 }
 
 install_app() {
-  require_tools cargo
   local prefix="${PREFIX:-$HOME/.local}"
-  local bin_path="$prefix/bin/viper-midi-mixer"
+  local bin_path="$prefix/bin/viper-mixer"
   local apps_dir="$prefix/share/applications"
   local icons_dir="$prefix/share/icons/hicolor"
   local launcher="$apps_dir/$app_id.desktop"
 
-  cargo build --release --locked
-
-  install -Dm755 target/release/viper-midi-mixer "$bin_path"
-  echo "Binary: $bin_path"
+  build_appimage
+  # Moved into place rather than written over, so a running Viper Mixer keeps its file and the new
+  # version starts the next time it opens. This also replaces an earlier install's bare binary.
+  install -Dm755 target/appimage/Viper-Mixer-x86_64.AppImage "$bin_path.new"
+  mv -f "$bin_path.new" "$bin_path"
+  echo "AppImage: $bin_path"
 
   install -Dm644 assets/logo.png "$icons_dir/512x512/apps/$app_id.png"
   # Earlier installs wrote smaller sizes of the icon. The shell picks one of those for notifications,
@@ -93,8 +94,7 @@ install_app() {
   # The launcher's Exec is the absolute binary path, so it goes stale when the prefix or the
   # desktop file changes. Compare the rendered launcher with the installed copy before rewriting it.
   local rendered
-  rendered="$(sed -e "s|^Exec=.*|Exec=$bin_path|" -e "s|^TryExec=.*|TryExec=$bin_path|" \
-    packaging/viper-midi-mixer.desktop)"
+  rendered="$(sed "s|^Exec=.*|Exec=$bin_path|" packaging/viper-mixer.desktop)"
   mkdir -p "$apps_dir"
   if [[ ! -f "$launcher" ]]; then
     echo "Launcher: new install, writing $launcher"
@@ -112,9 +112,9 @@ install_app() {
 
   case ":$PATH:" in
     *":$prefix/bin:"*) ;;
-    *) echo "Note: $prefix/bin is not on PATH, so the 'viper-midi-mixer' command won't resolve." ;;
+    *) echo "Note: $prefix/bin is not on PATH, so the 'viper-mixer' command won't resolve." ;;
   esac
-  echo "Installed Viper Mixer $version. Open it from the application menu; it runs in the tray."
+  echo "Installed Viper Mixer $version. Open it from the application menu."
 }
 
 refresh_caches() {

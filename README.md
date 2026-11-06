@@ -2,115 +2,118 @@
 
 # Viper Mixer
 
-A native Rust and egui mixer for MIDI hardware faders on Linux. Assign five MIDI
-faders to PipeWire audio applications, map mute notes, and keep assignments
-across application restarts. The app checks for new audio streams and MIDI
-devices while it runs, and it includes a Steam Games assignment for current and
-future Steam game audio.
-New app assignments are reconnected with PipeWire application metadata when
-stream node IDs change; existing Python settings continue to match by app name.
+<img src="assets/logo.png" width="96" align="left" alt="">
 
-## Build and run
+Hardware faders for your Linux desktop. Viper Mixer connects a MIDI controller to PipeWire, so each
+fader sets the volume of an app, every Steam game, your output device, or your microphone, and a
+button mutes it.
 
-Install Rust, ALSA development files, and the PipeWire command line tools
-(`pw-dump` and `wpctl`), then run:
+<br clear="left">
+
+![Viper Mixer](docs/screenshot.png)
+
+## Requirements
+
+- Linux with PipeWire, and its `pw-dump` and `wpctl` tools (`pipewire-bin` on Debian and Ubuntu,
+  `pipewire` on Arch and Fedora).
+- A USB MIDI controller. Any controller that sends control changes or notes works.
+- To build: Rust, a C compiler, `pkg-config`, and the ALSA headers (`libasound2-dev` on Debian and
+  Ubuntu, `alsa-lib` on Arch).
+
+## Run
 
 ```sh
 cargo run --release
 ```
 
-Build a release binary with `cargo build --release`. The executable is written
-to `target/release/viper-midi-mixer`.
+`viper-mixer --list-midi` prints the MIDI inputs it can see.
 
-List MIDI inputs from the command line with `cargo run --release -- --list-midi`.
+## Features
+
+- **Five channel strips.** Press a strip's name plate to pick what it drives: an app that is
+  playing, every Steam game at once, the default output device, or the default input. An app keeps
+  its strip when it restarts; one that isn't running stays listed as inactive.
+- **Learned controls.** Each strip has a FADER and a MUTE chip. Press one, then move a fader or
+  press a button on the controller to bind it, by channel. Right-click a chip to unbind it. A
+  control bound to one strip comes off any other. Out of the box, faders are CC 1–5 and mutes are
+  notes 37–41 on any channel.
+- **Mute modes.** Latch follows a switch (down mutes, up unmutes); Toggle flips on each press of a
+  button that springs back.
+- **Hardware that comes and goes.** The controller is remembered by name without ALSA's port
+  numbers, so it reconnects after you unplug it, plug it into another USB port, or reboot.
+  Automatic picks the first hardware input and skips MIDI Through and virtual ports. Strips on
+  the output or input follow the default device when it changes.
+- **Gentle on PipeWire.** A fast fader sweep sends only its latest level; a stuck `pw-dump` or
+  `wpctl` is stopped after a few seconds. Opening the app doesn't unmute anything until you press
+  a mute.
+- **Tray.** Closing the window keeps the mixer running in the tray, unless you turn off Close to
+  tray in the footer or the desktop has no tray. Opening it again brings the running window back.
+
+Settings live in `~/.config/viper-mixer/config.json`, the same file the previous version used, so
+assignments, levels and mute notes carry over. The older `~/.config/pipewire-mixer/config.json` is
+read when that file doesn't exist yet.
 
 ## Build an AppImage
-
-Build a distributable AppImage for x86_64 Linux:
 
 ```sh
 scripts/build.sh appimage
 ```
 
-The output is `target/appimage/Viper-Mixer-x86_64.AppImage`, under the same name for every
-version. The first run downloads linuxdeploy into `~/.cache/viper-midi-mixer/appimage-tools/`;
-later runs reuse it. This builds an AppImage without installing system files or requiring root.
+The output is `target/appimage/Viper-Mixer-x86_64.AppImage`, under the same name for every version.
+The first run downloads linuxdeploy into `~/.cache/viper-mixer/appimage-tools/`.
 
 ## Install locally
-
-Install the release binary, its icon, and a searchable launcher for your user:
 
 ```sh
 scripts/build.sh install
 ```
 
-The files go under `~/.local` (`bin/viper-midi-mixer`, the hicolor icon, and
-`share/applications/viper-midi-mixer.desktop`). Set `PREFIX` to install somewhere else. The
-script reports whether the launcher is new, up to date, or stale and rewritten, and refreshes the
-desktop, icon, and KDE caches so the menu picks it up. Your mixer settings in
-`~/.config/viper-mixer/` are not touched.
+This builds the AppImage and installs it under `~/.local` (`bin/viper-mixer`, the hicolor icon, and
+`share/applications/viper-mixer.desktop`). Set `PREFIX` to install somewhere else. There is no
+self-updater: install a new release the same way, or download it from the releases page.
 
-## MIDI controls
+## Regenerating files
 
-- MIDI CC 1–5 set fader levels 1–5.
-- Mute notes are configurable from each fader card with **Bind mute key**.
-- Choose a MIDI device from the input menu, or use **Automatic** to connect to
-  the first available input. **Disconnected** stops MIDI control until you
-  choose another option.
-- App assignments are saved in `~/.config/viper-mixer/config.json`.
+- `assets/logo.png` and `assets/tray.png` come from `assets/logo.svg`:
 
-The window and tray icons use `assets/logo.png`.
+  ```sh
+  rsvg-convert -w 512 -h 512 assets/logo.svg -o assets/logo.png
+  rsvg-convert -w 64 -h 64 assets/logo.svg -o assets/tray.png
+  ```
 
-When a desktop tray is available, closing the window keeps the app running in
-the tray. Use **Show Viper Mixer**, or launch the app again from the application menu, to reopen or bring
-forward its window.
-**Close to system tray** controls whether closing the window keeps the app
-running in the tray. Use **Quit** in the tray menu to exit the app.
+- `docs/screenshot.png` is the demo state, rendered without a window:
+
+  ```sh
+  cargo run --release -- --snap docs/screenshot.png --scene default
+  ```
 
 ## Releases
 
-Changelog entries and release notes come from the commit history with
-[git-cliff](https://git-cliff.org/), configured in `cliff.toml`. Each commit is sorted into
-a group by the start of its subject line, and commits that start with `Release`, `Bump`,
-`Merge`, or `Chore` are left out. Words that don't match a group go under **Other**, so write
-commit subjects with a leading verb, for example `Add ...`, `Fix ...`, or `Change ...`.
+Releases follow [docs/release.md](docs/release.md). In short:
 
-The release script sets the version, so you never edit it in `Cargo.toml` by hand. The version
-in the repo always matches the latest tag.
+- Versions are CalVer, `YY.M.N`: the two-digit year, the month, and which release of that month it
+  is, from 0 (`26.11.4` → `26.11.5`, then `26.12.0` in a new month). `scripts/release.sh next`
+  prints the next one; never set a version by hand.
+- Every commit that changes the app ends its message with a `Changelog:` paragraph for users, such
+  as `Changelog: Fixed: …`, or `Changelog: none`. The rules are in
+  [docs/changelog-style.md](docs/changelog-style.md). Turn on the hook that checks it once per
+  clone with `git config core.hooksPath scripts/hooks`.
+- After each push to `main` that passes CI, the Release workflow keeps a **Release vYY.M.N** pull
+  request up to date with the next version and its notes. Merging it with a merge commit
+  (`gh pr merge release --merge`) tags the release, builds the AppImage, and creates the GitHub
+  release with the notes from `CHANGELOG.md`.
+- To release right away from a clean, up-to-date `main`, run `scripts/release.sh bump`.
 
-### Version numbers
+## Project layout
 
-Versions are `MAJOR.MINOR.PATCH` with no leading zeros and no suffixes. Read the current version
-with `git describe --tags --abbrev=0`, then raise one part by one:
-
-- **Patch** for fixes and small changes: `0.5.1` → `0.5.2`.
-- **Minor** for larger features, resetting the patch: `0.5.1` → `0.6.0`.
-- **Major** only for a deliberate major release.
-
-Hotfixes are ordinary patch releases: a hotfix after `0.5.9` is `0.5.10`, not `0.5.91`. Each
-part is compared as a whole number, so `0.5.91` would sort above every release from `0.5.10` to
-`0.5.90` and break release ordering.
-
-### Cutting a release
-
-Run the script from a clean `main` that is up to date with `origin/main`:
-
-```sh
-scripts/release.sh 0.3.0
-```
-
-The script checks the version and the repo state, runs Clippy, and prints the release notes for
-the new version. After you confirm, it writes the version into `Cargo.toml` with
-`scripts/set-version.sh`, updates `Cargo.lock`, regenerates `CHANGELOG.md` with a full rewrite,
-commits them as `Release v0.3.0`, creates the annotated tag, and pushes `main` and the tag.
-Nothing is written until you confirm.
-
-Pushing the tag runs `.github/workflows/release-appimage.yml`. It runs `scripts/set-version.sh`
-with the tag's version, so a tag pushed without the script still builds with its own version.
-It then builds the AppImage, attaches it to a GitHub release named after the tag, and uses
-git-cliff for the release notes. To check the build without a release, run the workflow by hand
-from the Actions tab (**Run workflow**).
-
-Don't edit `CHANGELOG.md` by hand. Tags must start with `v` followed by a digit, such as
-`v0.3.0`. Never reuse, move, or delete a pushed tag; a broken release is followed by the next
-patch release.
+| Path | What it holds |
+| --- | --- |
+| `src/main.rs` | Startup: the single-instance lock, the tray, and the window |
+| `src/ui.rs` | The window, drawn with [Rune](https://github.com/anomalyco/rune), and its demo scenes |
+| `src/mixer.rs` | The mixer's state: assignments, levels, mutes, learning, and reconnecting |
+| `src/engine.rs` | Worker threads that run `pw-dump` and `wpctl` |
+| `src/midi.rs` | MIDI messages, port names, and the connection to the controller |
+| `src/stream.rs` | Reading apps and devices from `pw-dump` |
+| `src/config.rs` | Settings, including the previous version's |
+| `src/instance.rs`, `src/tray.rs` | One running copy per user, and the tray icon |
+| `scripts/`, `.github/`, `docs/` | Builds and releases |

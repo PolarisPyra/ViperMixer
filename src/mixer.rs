@@ -430,7 +430,10 @@ impl Mixer {
         }
     }
 
+    /// Sets a strip's level from the controller or the window, and lights the line beside its
+    /// fader either way.
     pub fn set_volume(&mut self, index: usize, volume: f32) {
+        self.touched_at[index] = Some(Instant::now());
         let volume = volume.clamp(0.0, 1.0);
         if self.config.fader_volumes[index] != volume {
             self.config.fader_volumes[index] = volume;
@@ -581,7 +584,6 @@ impl Mixer {
             if let Message::Cc { value, .. } = message
                 && self.config.fader_controls[index].is_some_and(|control| message.is(&control))
             {
-                self.touched_at[index] = Some(now);
                 self.set_volume(index, f32::from(value) / 127.0);
             }
             if self.config.mute_controls[index].is_some_and(|control| message.is(&control)) {

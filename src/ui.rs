@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 /// Space above and below the fader's travel.
 const FADER_PAD: f32 = 4.0;
 const HANDLE_W: f32 = 24.0;
-const HANDLE_H: f32 = 48.0;
+const HANDLE_H: f32 = 64.0;
 const GROOVE_W: f32 = 6.0;
 /// The level lights beside the fader: their size, and roughly how far apart they sit.
 const LED: f32 = 4.0;
@@ -497,9 +497,9 @@ fn level_lights(volume: f32, height: f32, muted: bool) -> El {
     lights
 }
 
-/// A fader cap's rows from top to bottom, one pixel each, taken from the reference console: a
-/// lit top face, fine ribs either side of a white line across the middle, and a black bottom
-/// face. There are `HANDLE_H` of them.
+/// A fader cap's rows from top to bottom, taken pixel by pixel from the reference console's
+/// 48-pixel cap: a lit top face, fine ribs either side of a white line across the middle, and a
+/// black bottom face. They are stretched evenly to `HANDLE_H`.
 const CAP_ROWS: [&str; 48] = [
     "#444444", "#969696", "#828282", "#888888", "#868686", "#848484", "#999999", "#292929",
     "#000000", "#292929", "#5E5E5E", "#0C0C0C", "#222222", "#161616", "#6B6B6B", "#5F5F5F",
@@ -516,8 +516,9 @@ fn cap(y: f32) -> El {
         .size(HANDLE_W, HANDLE_H)
         .absolute(0.0, y - HANDLE_H / 2.0)
         .box_shadow(Shadow { x: 0.0, y: 1.0, blur: 3.0, spread: 1.0, color: Color::BLACK.alpha(0.6), inset: false });
+    let row_h = HANDLE_H / CAP_ROWS.len() as f32;
     for (row, color) in CAP_ROWS.iter().enumerate() {
-        cap = cap.child(el().size(HANDLE_W, 1.0).absolute(0.0, row as f32).fill(c(color)));
+        cap = cap.child(el().size(HANDLE_W, row_h).absolute(0.0, row as f32 * row_h).fill(c(color)));
     }
     cap
 }
@@ -899,9 +900,8 @@ mod tests {
     }
 
     #[test]
-    fn the_cap_rows_fill_the_cap_and_centre_its_line() {
-        assert_eq!(CAP_ROWS.len() as f32, HANDLE_H);
+    fn the_cap_line_crosses_the_middle() {
         let brightest = (0..CAP_ROWS.len()).max_by_key(|&row| CAP_ROWS[row]).unwrap();
-        assert!((brightest as f32 - HANDLE_H / 2.0).abs() <= 1.0);
+        assert!((brightest as f32 + 0.5 - CAP_ROWS.len() as f32 / 2.0).abs() <= 1.0);
     }
 }

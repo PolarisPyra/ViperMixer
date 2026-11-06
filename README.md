@@ -17,8 +17,10 @@ button mutes it.
 - Linux with PipeWire, and its `pw-dump` and `wpctl` tools (`pipewire-bin` on Debian and Ubuntu,
   `pipewire` on Arch and Fedora).
 - A USB MIDI controller. Any controller that sends control changes or notes works.
-- To build: Rust, a C compiler, `pkg-config`, and the ALSA headers (`libasound2-dev` on Debian and
-  Ubuntu, `alsa-lib` on Arch).
+- To build: Rust, a C compiler, `pkg-config`, and the headers for ALSA, fontconfig, FreeType,
+  Wayland and xkbcommon (`libasound2-dev libfontconfig-dev libfreetype-dev libwayland-dev
+  libxkbcommon-x11-dev` on Debian and Ubuntu; `alsa-lib fontconfig freetype2 wayland libxkbcommon-x11`
+  on Arch). The window draws with Vulkan, so running it needs a Vulkan driver.
 
 ## Run
 
@@ -87,10 +89,11 @@ installed AppImage keeps itself up to date.
   rsvg-convert -w 64 -h 64 assets/logo.svg -o assets/tray.png
   ```
 
-- `docs/screenshot.png` is the demo state, rendered without a window:
+- `docs/screenshot.png` is the demo state, shown in a headless KWin of its own (KDE Plasma's
+  `kwin_wayland` and `spectacle`), so it never captures your desktop:
 
   ```sh
-  cargo run --release -- --snap docs/screenshot.png --scene default
+  scripts/screenshot.sh
   ```
 
 ## Releases
@@ -115,12 +118,13 @@ Releases follow [docs/release.md](docs/release.md). In short:
 | Path | What it holds |
 | --- | --- |
 | `src/main.rs` | Startup: the single-instance lock, the tray, and the window |
-| `src/ui.rs` | The window, drawn with [Rune](https://github.com/anomalyco/rune), and its demo scenes |
+| `src/ui.rs` | The window, drawn with [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), and its demo scenes |
 | `src/mixer.rs` | The mixer's state: assignments, levels, mutes, learning, and reconnecting |
 | `src/engine.rs` | Worker threads that run `pw-dump` and `wpctl` |
 | `src/midi.rs` | MIDI messages, port names, and the connection to the controller |
 | `src/stream.rs` | Reading apps and devices from `pw-dump` |
 | `src/config.rs` | Settings, including the previous version's |
+| `src/signal.rs` | How worker threads, the tray and a second launch reach the window |
 | `src/instance.rs`, `src/tray.rs` | One running copy per user, and the tray icon |
 | `src/updates.rs` | Checking GitHub for releases and installing them |
 | `scripts/`, `.github/`, `docs/` | Builds and releases |

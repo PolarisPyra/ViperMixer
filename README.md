@@ -38,8 +38,8 @@ cargo run --release
   the fader. Press one, then move a fader or press a button on the controller to bind it, by
   channel. Right-click one to unbind it. A control bound to one strip comes off any other. Out of
   the box, faders are CC 1–5 and mutes are notes 37–41 on any channel.
-- **Power buttons.** A strip's power button glows while it plays; pressing it mutes the strip
-  and turns its lights grey. A mute on the controller follows its switch: down mutes, up unmutes.
+- **Power buttons.** Pressing a strip's power button mutes it: the button glows red and the
+  strip's lights turn grey. A mute on the controller follows its switch: down mutes, up unmutes.
 - **Hardware that comes and goes.** The controller is remembered by name without ALSA's port
   numbers, so it reconnects after you unplug it, plug it into another USB port, or reboot.
   Automatic picks the first hardware input and skips MIDI Through and virtual ports. Strips on

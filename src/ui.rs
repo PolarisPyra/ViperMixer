@@ -428,27 +428,27 @@ fn power_icon(color: Color) -> El {
         .a11y_hidden()
 }
 
-/// The strip's mute, as a power button: lit while the strip plays, dark while it's muted.
+/// The strip's mute, as a power button: dark while the strip plays, glowing red while it's muted.
 fn power_button(s: &Mixer, index: usize) -> El {
-    let on = !s.muted[index];
-    let accent = c(ACCENT);
+    let muted = s.muted[index];
+    let red = c(RED);
     let button = el()
         .key(format!("mute-{index}"))
         .role("switch")
         .label(format!("Mute strip {}", index + 1))
-        .help(if on { "Playing. Press to mute." } else { "Muted. Press to unmute." })
-        .checked(!on)
+        .help(if muted { "Muted. Press to unmute." } else { "Playing. Press to mute." })
+        .checked(muted)
         .focusable(true)
         .size(POWER, POWER)
         .radius(POWER / 2.0)
         .center()
         .gradient(c("#48484C"), c("#2A2A2D"))
-        .border(2.0, if on { accent } else { c("#161618") })
+        .border(2.0, if muted { red } else { c("#161618") })
         .shadow(2.0, 5.0, Color::BLACK.alpha(0.6))
         .hover(Color::WHITE.alpha(0.05))
         .on_press(move |s: &mut Mixer| s.set_muted(index, !s.muted[index]))
-        .child(power_icon(if on { accent } else { c(DIM) }));
-    if on { button.box_shadow(glow(accent.alpha(0.5), 12.0)) } else { button }
+        .child(power_icon(if muted { red } else { c(DIM) }));
+    if muted { button.box_shadow(glow(red.alpha(0.55), 12.0)) } else { button }
 }
 
 /// The lights beside a fader, lit from the bottom up to its level; a muted strip's are grey.

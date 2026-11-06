@@ -3,6 +3,21 @@
 All notable changes to Viper Mixer are documented here, for the people who use it.
 Each release adds its notes at the top; see docs/release.md.
 
+## [26.11.1] - 2026-11-06
+
+### Changed
+
+- Viper Mixer has warm orange, amber and lime colours and a matching orange icon, so it no longer looks like Viper Music on the taskbar or side by side.
+- Viper Mixer looks like a hardware console, with a dark icon to match. Each strip has a power button that glows while it plays and mutes it when pressed, its level on a black bar, and a ribbed fader beside a column of lights. Check for updates is now in the header.
+
+### Fixed
+
+- In a large or maximized window, the strips stop growing once they reach a comfortable size and stay in the middle, so the faders no longer stretch out of shape.
+
+### Removed
+
+- The Latch and Toggle choice is gone from the footer. A mute on the controller always follows its switch: down mutes the strip and up unmutes it.
+
 ## [26.11.0] - 2026-11-06
 
 ### Added

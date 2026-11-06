@@ -3,6 +3,17 @@
 All notable changes to Viper Mixer are documented here, for the people who use it.
 Each release adds its notes at the top; see docs/release.md.
 
+## [26.11.2] - 2026-11-06
+
+### Changed
+
+- The area behind each fader is one even grey instead of fading from lighter at the top, like a hardware console's.
+- The faders look like a real console's: a ribbed cap riding in a lit groove with the level line inside it, beside a column of amber lights that glow up to the level.
+
+### Removed
+
+- The header no longer shows the app icon beside the name and version.
+
 ## [26.11.1] - 2026-11-06
 
 ### Changed

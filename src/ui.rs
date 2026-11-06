@@ -29,15 +29,15 @@ const ACTIVITY: Duration = Duration::from_millis(140);
 const MARKS: [f32; 6] = [0.0, -6.0, -12.0, -24.0, -36.0, -48.0];
 const SHORT_MARKS: [f32; 3] = [0.0, -12.0, -48.0];
 
-/// Patchwork's palette, one colour per strip.
-const ACCENTS: [&str; FADER_COUNT] = ["#5BC0EB", "#9B5DE5", "#FF7EB3", "#FEE440", "#00F5D4"];
+/// Warm console colours, one per strip, kept apart from Viper Music's blues and magentas.
+const ACCENTS: [&str; FADER_COUNT] = ["#FF8A3D", "#FFB020", "#A3E635", "#FF6B5B", "#E8C27A"];
 
-const BG: &str = "#15161A";
-const PANEL: &str = "#1A1C20";
-const HAIR: &str = "#2A2D33";
-const TEXT: &str = "#E7E9EE";
-const DIM: &str = "#8A909B";
-const FAINT: &str = "#5B606B";
+const BG: &str = "#171512";
+const PANEL: &str = "#1D1A16";
+const HAIR: &str = "#302B25";
+const TEXT: &str = "#EEE9E2";
+const DIM: &str = "#968E83";
+const FAINT: &str = "#635C53";
 const RED: &str = "#E5484D";
 
 fn c(hex: &str) -> Color {
@@ -202,16 +202,16 @@ fn logo() -> El {
             el().key(format!("slot{index}"))
                 .size(3.0, 11.0)
                 .radius(1.5)
-                .fill(c("#2D3047"))
+                .fill(c("#2B1D12"))
                 .child(el().size(5.0, 3.0).radius(1.0).absolute(-1.0, top).fill(Color::WHITE)),
         );
     }
     el().key("logo")
         .size(24.0, 24.0)
         .radius(6.0)
-        .fill(c("#9B5DE5"))
+        .fill(c("#FF8A3D"))
         .clip_rounded(6.0)
-        .child(el().size(24.0, 7.0).absolute(0.0, 0.0).fill(c("#5BC0EB")))
+        .child(el().size(24.0, 7.0).absolute(0.0, 0.0).fill(c("#FFE8C2")))
         .child(faders)
         .a11y_hidden()
 }

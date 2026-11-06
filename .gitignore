@@ -1,0 +1,5 @@
+target/
+.scratch/
+.release-notes
+**/*.rs.bk
+rustc-ice-*.txt

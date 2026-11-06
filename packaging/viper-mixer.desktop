@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Viper Mixer
+Comment=Control app and device volumes from a MIDI fader controller
+Exec=viper-mixer
+Icon=viper-mixer
+Terminal=false
+Categories=AudioVideo;Audio;Mixer;
+Keywords=volume;midi;fader;pipewire;
+StartupWMClass=viper-mixer
+StartupNotify=true

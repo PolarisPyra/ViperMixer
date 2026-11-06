@@ -1,0 +1,26 @@
+[package]
+name = "viper-mixer"
+version = "26.11.0"
+edition = "2024"
+description = "A MIDI fader controller for PipeWire by Viper"
+license = "MIT"
+
+[dependencies]
+# Rune pins a `dev` rev, which is never rewritten. Only `dbus` is on: the Linux system tray and the
+# desktop's dark preference. The rest of Rune's defaults are for macOS, the web, SVG and screen
+# readers, which the mixer doesn't use.
+rune = { git = "https://github.com/anomalyco/rune", rev = "7ead7d63fcf6f9dd9669385a8b90e2ae80015d7b", default-features = false, features = ["dbus"] }
+midir = "0.10"
+# Both are already in Rune's dependency tree, so they add nothing to the build.
+png = "0.18"
+serde_json = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# Shipped builds (scripts/build.sh) trade a slower link for a smaller, faster binary.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+strip = true

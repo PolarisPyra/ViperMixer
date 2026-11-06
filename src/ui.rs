@@ -17,9 +17,9 @@ use std::time::{Duration, Instant};
 
 /// Space above and below the fader's travel.
 const FADER_PAD: f32 = 4.0;
-const HANDLE_W: f32 = 26.0;
-const HANDLE_H: f32 = 34.0;
-const GROOVE_W: f32 = 8.0;
+const HANDLE_W: f32 = 24.0;
+const HANDLE_H: f32 = 48.0;
+const GROOVE_W: f32 = 6.0;
 /// The level lights beside the fader: their size, and roughly how far apart they sit.
 const LED: f32 = 4.0;
 const LED_STEP: f32 = 18.0;
@@ -467,7 +467,8 @@ fn power_button(s: &Mixer, index: usize) -> El {
     if muted { button.box_shadow(glow(red.alpha(0.55), 12.0)) } else { button }
 }
 
-/// The lights beside a fader, lit from the bottom up to its level; a muted strip's are grey.
+/// The lights beside a fader, lit from the bottom up to its level; a muted strip's are grey. The
+/// bottom one marks silence and stays dark.
 fn level_lights(volume: f32, height: f32, muted: bool) -> El {
     let (top, bottom, at) = (handle_y(1.0, height), handle_y(0.0, height), handle_y(volume, height));
     let count = (((bottom - top) / LED_STEP) as usize + 1).clamp(4, 16);
@@ -475,8 +476,10 @@ fn level_lights(volume: f32, height: f32, muted: bool) -> El {
     let mut lights = el().key("lights").w(LED).h_full().a11y_hidden();
     for step in 0..count {
         let y = top + (bottom - top) * step as f32 / (count - 1) as f32;
-        let on = volume > 0.0 && y >= at - 0.5;
-        let mut light = el().size(LED, LED).radius(LED / 2.0).absolute(0.0, y - LED / 2.0).fill(if on { lit } else { c(LED_OFF) });
+        let floor = step == count - 1;
+        let on = !floor && volume > 0.0 && y >= at - 0.5;
+        let off = if floor { c("#0A0A0B") } else { c(LED_OFF) };
+        let mut light = el().size(LED, LED).radius(LED / 2.0).absolute(0.0, y - LED / 2.0).fill(if on { lit } else { off });
         if on && !muted {
             light = light.box_shadow(glow(lit.alpha(0.7), 6.0));
         }
@@ -485,23 +488,50 @@ fn level_lights(volume: f32, height: f32, muted: bool) -> El {
     lights
 }
 
-/// A fader cap: a ribbed metal block with a bright line across its middle.
+/// The bands of a fader cap from top to bottom, as (height, colour): chrome ribs that brighten
+/// towards the white line across the middle, the way light catches a console fader. They add up
+/// to `HANDLE_H`.
+const CAP_BANDS: [(f32, &str); 19] = [
+    (4.0, "#6E6E72"),
+    (2.0, "#BDBDC1"),
+    (2.0, "#4E4E52"),
+    (2.0, "#CACACD"),
+    (2.0, "#434347"),
+    (2.0, "#D6D6D9"),
+    (3.0, "#38383C"),
+    (3.0, "#E8E8EA"),
+    (2.0, "#2A2A2D"),
+    (4.0, "#FFFFFF"),
+    (2.0, "#2A2A2D"),
+    (3.0, "#F2F2F4"),
+    (2.0, "#323235"),
+    (3.0, "#E2E2E5"),
+    (2.0, "#3C3C40"),
+    (3.0, "#D2D2D5"),
+    (2.0, "#46464A"),
+    (3.0, "#BFBFC3"),
+    (2.0, "#5E5E62"),
+];
+
+/// A fader cap: a block of chrome bands with a white line across its middle.
 fn cap(y: f32) -> El {
     let mut cap = el()
         .key("handle")
         .size(HANDLE_W, HANDLE_H)
         .absolute(0.0, y - HANDLE_H / 2.0)
-        .radius(2.5)
-        .gradient(c("#ECECEE"), c("#86868B"))
-        .shadow(3.0, 7.0, Color::BLACK.alpha(0.65));
-    let middle = HANDLE_H / 2.0;
-    for rib in 1..11 {
-        let at = rib as f32 * 3.0;
-        if (at - middle).abs() > 2.5 {
-            cap = cap.child(el().size(HANDLE_W - 4.0, 1.0).absolute(2.0, at).fill(Color::BLACK.alpha(0.35)));
-        }
+        .radius(2.0)
+        .clip_rounded(2.0)
+        .shadow(4.0, 8.0, Color::BLACK.alpha(0.7));
+    let mut at = 0.0;
+    for (height, color) in CAP_BANDS {
+        cap = cap.child(el().size(HANDLE_W, height).absolute(0.0, at).fill(c(color)));
+        at += height;
     }
-    cap.child(el().size(HANDLE_W, 2.0).absolute(0.0, middle - 1.0).fill(Color::WHITE))
+    // Darker sides round the block off.
+    cap.child(el().size(HANDLE_W, HANDLE_H).absolute(0.0, 0.0).linear_gradient(
+        std::f32::consts::FRAC_PI_2,
+        [(0.0, Color::BLACK.alpha(0.35)), (0.18, Color::TRANSPARENT), (0.82, Color::TRANSPARENT), (1.0, Color::BLACK.alpha(0.35))],
+    ))
 }
 
 fn fader(s: &Mixer, index: usize, height: f32) -> El {
@@ -527,11 +557,18 @@ fn fader(s: &Mixer, index: usize, height: f32) -> El {
         .child(el().key("fill").size(2.0, (bottom - y).max(0.0)).absolute((HANDLE_W - 2.0) / 2.0, y).radius(1.0).fill(if muted { c(DIM) } else { accent }))
         .child(cap(y))
         .a11y_hidden();
-    // The thin line on the right lights while the controller moves the strip.
-    let mut signal = el().size(2.0, (bottom - top).max(0.0)).absolute(0.0, top).radius(1.0).fill(if lit { accent } else { c(LED_OFF) });
-    if lit {
-        signal = signal.box_shadow(glow(accent.alpha(0.7), 6.0));
-    }
+    // The thin line on the right, in two segments: both light while the controller moves the
+    // strip, and the lower one glows red while it's muted.
+    let split = top + (bottom - top) * 0.42;
+    let segment = |from: f32, to: f32, color: Option<Color>| {
+        let line = el().size(2.0, (to - from).max(0.0)).absolute(0.0, from).radius(1.0).fill(color.unwrap_or(c(LED_OFF)));
+        match color {
+            Some(color) => line.box_shadow(glow(color.alpha(0.7), 6.0)),
+            None => line,
+        }
+    };
+    let upper = segment(top, split - 3.0, lit.then_some(accent));
+    let lower = segment(split + 3.0, bottom, if muted { Some(c(RED)) } else { lit.then_some(accent) });
     // The whole width takes the drag, not just the handle.
     row()
         .key(format!("fader-{index}"))
@@ -567,7 +604,7 @@ fn fader(s: &Mixer, index: usize, height: f32) -> El {
         })
         .child(level_lights(volume, height, muted))
         .child(track)
-        .child(el().key("signal").w(2.0).h_full().child(signal).a11y_hidden())
+        .child(el().key("signal").w(2.0).h_full().child(upper).child(lower).a11y_hidden())
 }
 
 /// The control a strip's mute or fader learned, under the power button or the fader. A press
@@ -581,7 +618,7 @@ fn binding_chip(s: &Mixer, index: usize, mute: bool) -> El {
         ("Listening…".to_owned(), accent)
     } else {
         match bound {
-            Some(control) => (control.label(), c(DIM)),
+            Some(control) => (control.label(), c("#D4D4D7")),
             None => ("Learn".to_owned(), c(FAINT)),
         }
     };
@@ -871,5 +908,12 @@ mod tests {
     fn the_handle_spans_the_fader() {
         assert_eq!(handle_y(1.0, 300.0), FADER_PAD + HANDLE_H / 2.0);
         assert_eq!(handle_y(0.0, 300.0), 300.0 - FADER_PAD - HANDLE_H / 2.0);
+    }
+
+    #[test]
+    fn the_cap_bands_fill_the_cap_and_centre_its_line() {
+        assert_eq!(CAP_BANDS.iter().map(|(height, _)| height).sum::<f32>(), HANDLE_H);
+        let above: f32 = CAP_BANDS.iter().take_while(|(_, color)| *color != "#FFFFFF").map(|(height, _)| height).sum();
+        assert_eq!(above + 2.0, HANDLE_H / 2.0);
     }
 }

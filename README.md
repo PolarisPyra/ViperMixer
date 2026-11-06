@@ -30,14 +30,16 @@ cargo run --release
 
 ## Features
 
-- **Five channel strips.** Press a strip's name plate to pick what it drives: an app that is
-  playing, every Steam game at once, the default output device, or the default input. An app keeps
-  its strip when it restarts; one that isn't running stays listed as inactive.
-- **Learned controls.** Each strip lists its Fader and Mute controls. Press one, then move a
-  fader or press a button on the controller to bind it, by channel. Right-click one to unbind it.
-  A control bound to one strip comes off any other. Out of the box, faders are CC 1–5 and mutes
-  are notes 37–41 on any channel.
-- **Mutes follow the switch.** Down mutes the strip and up unmutes it.
+- **Five channel strips,** laid out like a hardware console. Press a strip's tab to pick what it
+  drives: an app that is playing, every Steam game at once, the default output device, or the
+  default input. An app keeps its strip when it restarts; one that isn't running stays listed as
+  inactive.
+- **Learned controls.** The mute control shows under the power button and the fader control under
+  the fader. Press one, then move a fader or press a button on the controller to bind it, by
+  channel. Right-click one to unbind it. A control bound to one strip comes off any other. Out of
+  the box, faders are CC 1–5 and mutes are notes 37–41 on any channel.
+- **Power buttons.** A strip's power button glows while it plays; pressing it mutes the strip
+  and turns its lights grey. A mute on the controller follows its switch: down mutes, up unmutes.
 - **Hardware that comes and goes.** The controller is remembered by name without ALSA's port
   numbers, so it reconnects after you unplug it, plug it into another USB port, or reboot.
   Automatic picks the first hardware input and skips MIDI Through and virtual ports. Strips on
@@ -48,7 +50,7 @@ cargo run --release
 - **Tray.** Closing the window keeps the mixer running in the tray, unless you turn off Close to
   tray in the footer or the desktop has no tray. Opening it again brings the running window back.
 - **Updates.** Shortly after it starts and then every hour, the mixer looks for a new release on
-  GitHub; Check for updates in the footer looks right away. Installed as an AppImage, it downloads
+  GitHub; Check for updates in the header looks right away. Installed as an AppImage, it downloads
   the update, checks it, and replaces itself, and a banner offers to restart into it. Built from
   source, it says a release is out and links to it. It needs `curl`.
 

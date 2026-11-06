@@ -4,7 +4,7 @@
 
 Releases follow [docs/release.md](docs/release.md); never tag by hand.
 
-Scope: this repo only (Viper Mixer). A bump or release request never covers the other Viper repos (vipermusic, or the older egui vipermixer), even if the request says "both" or "all repos"; each gets its own request.
+Scope: this repo only (Viper Mixer). A bump or release request never covers the other Viper repos (such as vipermusic), even if the request says "both" or "all repos"; each gets its own request.
 
 - Every push to `main` runs CI, and when it passes, the Release workflow checks whether a commit since the last tag has a `Changelog:` paragraph other than `none`. If one does, it puts the next version and its notes on the `release` branch and keeps the "Release vYY.M.N" pull request up to date. Merging that pull request releases it: the run after the merge tags it, builds the AppImage, and creates the GitHub release. So "push" never releases, and you never bump the version.
 - "Release" (or "merge the release") means `gh pr merge release --merge`, only ever with a merge commit, never squash or rebase.

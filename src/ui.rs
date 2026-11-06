@@ -10,7 +10,7 @@ use crate::mixer::{Health, Learn, Menu, Mixer, port_title};
 use crate::stream::{AudioStream, Device};
 use crate::updates::{RELEASES_URL, UpdateState, Updater};
 use rune::{
-    Align, AppSpec, Color, Cx, Drag, El, Key, KeyEvent, LineCap, Phase, ScrollSpec, Shadow, Shape, Side, Span, TextStyle, Tx, col, el,
+    Align, AppSpec, Color, Cx, Drag, El, Key, KeyEvent, LineCap, Phase, ScrollSpec, Shadow, Shape, Side, Span, Spring, TextStyle, Tx, col, el,
     row, text,
 };
 use std::cell::Cell;
@@ -21,9 +21,10 @@ const FADER_PAD: f32 = 4.0;
 const HANDLE_W: f32 = 24.0;
 const HANDLE_H: f32 = 64.0;
 const GROOVE_W: f32 = 6.0;
-/// The level lights beside the fader: their size, and roughly how far apart they sit.
+/// The level lights beside the fader: their size, and how many there are, spread over its travel
+/// so a resize moves them rather than adding or dropping any.
 const LED: f32 = 4.0;
-const LED_STEP: f32 = 18.0;
+const LIGHTS: usize = 14;
 const POWER: f32 = 38.0;
 const TAB_H: f32 = 44.0;
 const MUTE_CELL_H: f32 = 92.0;
@@ -347,6 +348,9 @@ fn header(s: &Mixer) -> El {
         .child(
             bar_button("updates")
                 .w(z(UPDATES_W))
+                // Its label and highlight change at once, without sliding or fading.
+                .instant_changes()
+                .motion(Spring::NONE)
                 .label(format!("Check for updates to Viper Mixer {}", env!("CARGO_PKG_VERSION")))
                 .a11y_value(updates_label.clone())
                 .focusable(!checking)
@@ -492,12 +496,11 @@ fn power_button(s: &Mixer, index: usize) -> El {
 /// bottom one marks silence and stays dark.
 fn level_lights(volume: f32, height: f32, muted: bool) -> El {
     let (top, bottom, at) = (handle_y(1.0, height), handle_y(0.0, height), handle_y(volume, height));
-    let count = (((bottom - top) / z(LED_STEP)) as usize + 1).clamp(4, 16);
     let lit = if muted { c(DIM) } else { c(ACCENT) };
     let mut lights = el().key("lights").w(z(LED)).h_full().a11y_hidden();
-    for step in 0..count {
-        let y = top + (bottom - top) * step as f32 / (count - 1) as f32;
-        let floor = step == count - 1;
+    for step in 0..LIGHTS {
+        let y = top + (bottom - top) * step as f32 / (LIGHTS - 1) as f32;
+        let floor = step == LIGHTS - 1;
         let on = !floor && volume > 0.0 && y >= at - 0.5;
         let off = if floor { c("#0A0A0B") } else { c(LED_OFF) };
         let mut light = el().size(z(LED), z(LED)).radius(z(LED / 2.0)).absolute(0.0, y - z(LED / 2.0)).fill(if on { lit } else { off });

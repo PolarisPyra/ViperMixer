@@ -10,11 +10,10 @@ use crate::mixer::{Health, Learn, Menu, Mixer, port_title};
 use crate::stream::{AudioStream, Device};
 use crate::updates::{RELEASES_URL, UpdateState, Updater};
 use rune::{
-    Align, AppSpec, Color, Cx, Drag, El, ImageCache, Key, KeyEvent, LineCap, Phase, Pixels, ScrollSpec, Shadow, Shape, Side, Span, Spring, TextStyle, Tx, col, el,
+    Align, AppSpec, Color, Cx, Drag, El, Key, KeyEvent, LineCap, Phase, ScrollSpec, Shadow, Shape, Side, Span, Spring, TextStyle, Tx, col, el,
     row, text,
 };
 use std::cell::Cell;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Space above and below the fader's travel.
@@ -238,20 +237,6 @@ fn view(s: &Mixer, cx: &mut Cx<Mixer>) -> El {
     root
 }
 
-fn logo() -> El {
-    thread_local! {
-        /// The app icon, from `assets/logo.png` (see the README for regenerating it), decoded
-        /// once with mips so it stays sharp at every zoom. It draws as one picture, so its
-        /// parts can't snap apart while the window resizes.
-        static LOGO: Pixels = {
-            let image = ImageCache::new(Arc::new(|| {})).load(&include_bytes!("../assets/logo.png")[..]);
-            let _ = image.wait();
-            image.pixels().clone()
-        };
-    }
-    LOGO.with(|logo| el().key("logo").size(z(24.0), z(24.0)).pixels(logo).a11y_hidden())
-}
-
 /// A bordered button on one of the black bars.
 fn bar_button(key: &str) -> El {
     el().key(key)
@@ -295,7 +280,6 @@ fn header(s: &Mixer) -> El {
         .gap(z(10.0))
         .center_y()
         .fill(c(BAR))
-        .child(logo())
         .child(runs(
             font(13.5, 650.0),
             &[("Viper Mixer", 13.5, 650.0, TEXT), (concat!("   ", env!("CARGO_PKG_VERSION")), 11.0, 500.0, FAINT)],

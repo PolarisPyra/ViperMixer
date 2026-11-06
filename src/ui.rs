@@ -213,10 +213,10 @@ pub(crate) fn on_close(s: &mut Mixer, tx: &mut Tx) {
 fn view(s: &Mixer, cx: &mut Cx<Mixer>) -> El {
     // Every fader is as tall as the first.
     let fader_h = cx.layout_size("fader-0").map_or(FADER_GUESS, |[_, h]| h);
-    // Zoomed by the tighter of the window's two axes, in steps so a live resize doesn't lay text
-    // out at a new size every frame.
+    // Zoomed by the tighter of the window's two axes, smoothly, so a resize grows everything
+    // together rather than in jumps.
     let [w, h] = cx.layout_size("window").unwrap_or(BASE);
-    ZOOM.set(((w / BASE[0]).min(h / BASE[1]).max(1.0) * 20.0).floor() / 20.0);
+    ZOOM.set((w / BASE[0]).min(h / BASE[1]).max(1.0));
     // The gaps between strips, and between the bars, show the lines.
     let mut strips = row().key("strips").grow(1.0).w_full().min_h(0.0).gap(1.0);
     for index in 0..FADER_COUNT {

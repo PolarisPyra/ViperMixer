@@ -46,8 +46,10 @@ const ACCENT: &str = "#FF9A3C";
 const BAR: &str = "#0F0F10";
 /// The lines between cells.
 const LINE: &str = "#1B1B1D";
+/// The grey cells, which fade gently from top to bottom, and the fader cells, which stay flat.
 const CELL_TOP: &str = "#2C2C2F";
 const CELL_BOTTOM: &str = "#252527";
+const CELL: &str = "#29292B";
 /// A chosen tab, or a control on a bar.
 const RAISED: &str = "#38383B";
 const CONTROL: &str = "#1C1C1E";
@@ -393,7 +395,7 @@ fn strip(s: &Mixer, index: usize, fader_h: f32) -> El {
                 .w_full()
                 .grow(1.0)
                 .min_h(0.0)
-                .gradient(c(CELL_TOP), c(CELL_BOTTOM))
+                .fill(c(CELL))
                 .px(z(8.0))
                 .pt(z(10.0))
                 .pb(z(8.0))

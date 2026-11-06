@@ -33,10 +33,10 @@ cargo run --release
 - **Five channel strips.** Press a strip's name plate to pick what it drives: an app that is
   playing, every Steam game at once, the default output device, or the default input. An app keeps
   its strip when it restarts; one that isn't running stays listed as inactive.
-- **Learned controls.** Each strip has a FADER and a MUTE chip. Press one, then move a fader or
-  press a button on the controller to bind it, by channel. Right-click a chip to unbind it. A
-  control bound to one strip comes off any other. Out of the box, faders are CC 1–5 and mutes are
-  notes 37–41 on any channel.
+- **Learned controls.** Each strip lists its Fader and Mute controls. Press one, then move a
+  fader or press a button on the controller to bind it, by channel. Right-click one to unbind it.
+  A control bound to one strip comes off any other. Out of the box, faders are CC 1–5 and mutes
+  are notes 37–41 on any channel.
 - **Mute modes.** Latch follows a switch (down mutes, up unmutes); Toggle flips on each press of a
   button that springs back.
 - **Hardware that comes and goes.** The controller is remembered by name without ALSA's port

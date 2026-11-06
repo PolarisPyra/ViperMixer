@@ -1,74 +1,91 @@
-//! The window: a dark console with five channel strips, each with an assignment plate, a fader,
-//! a level readout, a mute button and the controller bindings it learned.
+//! The window: five channel strips in a flat, plugin-style panel, each with what it drives, its
+//! level, a fader, a mute button and the controller bindings it learned. Everything stretches with
+//! the window; the faders take the height.
 
 use crate::config::{FADER_COUNT, INPUT, MIDI_DISCONNECTED, MuteMode, OUTPUT, STEAM_ALL};
 use crate::engine::Engine;
-use crate::mixer::{Health, Learn, Menu, Mixer, port_title};
 use crate::midi::{self, Control};
+use crate::mixer::{Health, Learn, Menu, Mixer, port_title};
 use crate::stream::{AudioStream, Device};
-use rune::{Align, AppSpec, Color, Cx, Drag, El, Key, KeyEvent, Phase, ScrollSpec, Shadow, Side, TextStyle, Tx, col, el, row, text};
+use rune::{Align, AppSpec, Color, Cx, Drag, El, Key, KeyEvent, Phase, ScrollSpec, Side, TextStyle, Tx, col, el, row, text};
 use std::time::{Duration, Instant};
 
-const STRIP_W: f32 = 136.0;
-const FADER_H: f32 = 220.0;
-const CAP_W: f32 = 46.0;
-const CAP_H: f32 = 26.0;
-const TRAVEL: f32 = FADER_H - CAP_H;
-const SCALE_W: f32 = 30.0;
+/// Space above and below the fader's travel.
+const FADER_PAD: f32 = 8.0;
+const HANDLE_W: f32 = 30.0;
+const HANDLE_H: f32 = 10.0;
+const TRACK_W: f32 = 4.0;
+const SCALE_W: f32 = 24.0;
+/// The fader's height before the first layout measures it.
+const FADER_GUESS: f32 = 260.0;
+/// Below this strip width the binding chips drop their "Fader" and "Mute" labels.
+const COMPACT_STRIP: f32 = 108.0;
 /// How long a strip's controller light stays on after a message.
 const ACTIVITY: Duration = Duration::from_millis(140);
-/// The fader scale, in dB.
+/// The fader scale, in dB; the short list is for a short window.
 const MARKS: [f32; 6] = [0.0, -6.0, -12.0, -24.0, -36.0, -48.0];
+const SHORT_MARKS: [f32; 3] = [0.0, -12.0, -48.0];
 
 /// Patchwork's palette, one colour per strip.
 const ACCENTS: [&str; FADER_COUNT] = ["#5BC0EB", "#9B5DE5", "#FF7EB3", "#FEE440", "#00F5D4"];
+
+const BG: &str = "#15161A";
+const PANEL: &str = "#1A1C20";
+const HAIR: &str = "#2A2D33";
+const TEXT: &str = "#E7E9EE";
+const DIM: &str = "#8A909B";
+const FAINT: &str = "#5B606B";
+const RED: &str = "#E5484D";
 
 fn c(hex: &str) -> Color {
     rune::color::hex(hex).unwrap_or(Color::BLACK)
 }
 
-fn style(size: f32, weight: f32) -> TextStyle {
-    TextStyle::new(size, weight)
-}
-
-fn mono(size: f32, weight: f32) -> TextStyle {
-    TextStyle::new(size, weight).mono()
-}
-
 fn label(content: impl Into<String>, size: f32, weight: f32, color: &str) -> El {
-    text(content.into()).font(style(size, weight)).color(c(color))
+    text(content.into()).font(TextStyle::new(size, weight)).color(c(color))
 }
 
-fn led(health: Option<Health>, size: f32) -> El {
-    let color = match health {
-        Some(Health::Good) => "#3EF08A",
-        Some(Health::Waiting) => "#FFB547",
-        Some(Health::Bad) => "#FF5A6A",
-        None => "#3A3F4A",
-    };
-    let mut dot = el().size(size, size).radius(size / 2.0).fill(c(color)).border(1.0, Color::BLACK.alpha(0.45));
-    if health.is_some() {
-        dot = dot.shadow(0.0, size * 1.6, c(color).alpha(0.7));
-    }
-    dot.a11y_hidden()
+fn mono(content: impl Into<String>, size: f32, color: Color) -> El {
+    text(content.into()).font(TextStyle::new(size, 500.0).mono()).color(color)
+}
+
+fn health_color(health: Health) -> Color {
+    c(match health {
+        Health::Good => "#3DD68C",
+        Health::Waiting => "#F5A524",
+        Health::Bad => RED,
+    })
+}
+
+fn dot(color: Option<Color>, size: f32) -> El {
+    el().size(size, size).radius(size / 2.0).fill(color.unwrap_or(c(HAIR))).a11y_hidden()
 }
 
 /// A level as the scale shows it: the cubic volume PipeWire uses, in dB.
 pub(crate) fn decibels(volume: f32) -> String {
-    if volume <= 0.0001 { "−∞ dB".into() } else { format!("{:.1} dB", 60.0 * volume.log10()).replace('-', "−") }
+    format!("{} dB", level_number(volume))
+}
+
+fn level_number(volume: f32) -> String {
+    if volume <= 0.0001 { "−∞".into() } else { format!("{:.1}", 60.0 * volume.log10()).replace('-', "−") }
 }
 
 fn volume_at(decibels: f32) -> f32 {
     10f32.powf(decibels / 60.0)
 }
 
-fn cap_top(volume: f32) -> f32 {
-    (1.0 - volume) * TRAVEL
+/// Where the handle's centre sits for `volume` in a fader `height` tall.
+fn handle_y(volume: f32, height: f32) -> f32 {
+    FADER_PAD + HANDLE_H / 2.0 + (1.0 - volume) * travel(height)
+}
+
+fn travel(height: f32) -> f32 {
+    (height - 2.0 * FADER_PAD - HANDLE_H).max(1.0)
 }
 
 pub(crate) fn spec() -> AppSpec<Mixer> {
     AppSpec {
-        min_size: Some((780.0, 580.0)),
+        min_size: Some((560.0, 460.0)),
         setup: Some(|s, waker| {
             if rune::tooling::headless_run().is_none() {
                 s.attach(Engine::start(waker));
@@ -96,7 +113,7 @@ pub(crate) fn spec() -> AppSpec<Mixer> {
                 s.midi_status = "No MIDI device · plug one in".into();
             }),
         ],
-        ..AppSpec::new("Viper Mixer", (780.0, 580.0), || Mixer::new(Default::default()), view)
+        ..AppSpec::new("Viper Mixer", (760.0, 560.0), || Mixer::new(Default::default()), view)
     }
 }
 
@@ -138,19 +155,24 @@ pub(crate) fn on_close(s: &mut Mixer, tx: &mut Tx) {
     }
 }
 
-fn view(s: &Mixer, _: &mut Cx<Mixer>) -> El {
-    let mut strips = row().key("strips").gap(10.0).px(16.0).py(14.0).grow(1.0).justify_center().items_start();
+fn view(s: &Mixer, cx: &mut Cx<Mixer>) -> El {
+    // Every fader is as tall as the first, and every strip as wide.
+    let fader_h = cx.layout_size("fader-0").map_or(FADER_GUESS, |[_, h]| h);
+    let compact = cx.layout_with("strip-0", |r| r[2] < COMPACT_STRIP).unwrap_or(false);
+    let mut strips = row().key("strips").grow(1.0).w_full().px(6.0).min_h(0.0);
     for index in 0..FADER_COUNT {
-        strips = strips.child(strip(s, index));
+        if index > 0 {
+            strips = strips.child(el().key(format!("rule-{index}")).w(1.0).my(14.0).fill(c(HAIR)));
+        }
+        strips = strips.child(strip(s, index, fader_h, compact));
     }
     let mut root = col()
         .key("window")
         .role("window")
         .w_full()
         .h_full()
-        .gradient(c("#1F2228"), c("#121317"))
+        .fill(c(BG))
         .child(header(s))
-        .child(el().key("rule").h(1.0).w_full().fill(Color::BLACK.alpha(0.6)))
         .child(strips)
         .child(footer(s));
     if let Some(menu) = s.menu {
@@ -163,24 +185,22 @@ fn view(s: &Mixer, _: &mut Cx<Mixer>) -> El {
 
 fn logo() -> El {
     // The app icon, drawn small: a console with a seam and three faders.
-    let mut faders = row().key("faders").gap(4.0).absolute(7.0, 14.0);
-    for (index, top) in [9.0, 3.0, 6.0].into_iter().enumerate() {
+    let mut faders = row().key("faders").gap(3.0).absolute(5.0, 10.0);
+    for (index, top) in [6.0, 2.0, 4.0].into_iter().enumerate() {
         faders = faders.child(
             el().key(format!("slot{index}"))
-                .size(4.0, 15.0)
-                .radius(2.0)
+                .size(3.0, 11.0)
+                .radius(1.5)
                 .fill(c("#2D3047"))
-                .child(el().size(6.0, 4.0).radius(1.5).absolute(-1.0, top).fill(Color::WHITE)),
+                .child(el().size(5.0, 3.0).radius(1.0).absolute(-1.0, top).fill(Color::WHITE)),
         );
     }
     el().key("logo")
-        .size(34.0, 34.0)
-        .radius(9.0)
+        .size(24.0, 24.0)
+        .radius(6.0)
         .fill(c("#9B5DE5"))
-        .clip_rounded(9.0)
-        .shadow(2.0, 8.0, Color::BLACK.alpha(0.5))
-        .child(el().size(34.0, 10.0).absolute(0.0, 0.0).fill(c("#5BC0EB")))
-        .child(el().size(34.0, 1.0).absolute(0.0, 10.0).fill(Color::WHITE.alpha(0.75)))
+        .clip_rounded(6.0)
+        .child(el().size(24.0, 7.0).absolute(0.0, 0.0).fill(c("#5BC0EB")))
         .child(faders)
         .a11y_hidden()
 }
@@ -198,86 +218,83 @@ fn header(s: &Mixer) -> El {
     let open = s.menu == Some(Menu::Midi);
     row()
         .key("header")
-        .h(60.0)
+        .h(48.0)
         .w_full()
-        .px(18.0)
-        .gap(12.0)
+        .px(16.0)
+        .gap(10.0)
         .center_y()
-        .gradient(c("#2A2E36"), c("#1E2127"))
+        .fill(c(PANEL))
         .child(logo())
-        .child(
-            col()
-                .key("title")
-                .gap(1.0)
-                .child(label("Viper Mixer", 17.0, 700.0, "#EEF0F5"))
-                .child(label("MIDI fader controller for PipeWire", 11.0, 500.0, "#7D8494")),
-        )
+        .child(label("Viper Mixer", 14.0, 650.0, TEXT))
         .child(el().grow(1.0))
+        .child(
+            row()
+                .key("pipewire")
+                .gap(6.0)
+                .center_y()
+                .help(s.pipewire_status.clone())
+                .child(dot(Some(health_color(s.pipewire_health)), 6.0))
+                .child(label("PipeWire", 11.0, 500.0, DIM)),
+        )
         .child(
             row()
                 .key("midi-button")
                 .role("button")
                 .label("MIDI device")
+                .help(s.midi_status.clone())
                 .focusable(true)
-                .w(250.0)
-                .h(34.0)
+                .w(220.0)
+                .h(30.0)
                 .px(10.0)
                 .gap(8.0)
                 .center_y()
-                .radius(7.0)
-                .gradient(c("#16181D"), c("#1B1E24"))
-                .border(1.0, if open { c("#5BC0EB") } else { Color::BLACK.alpha(0.7) })
-                .box_shadow(Shadow { x: 0.0, y: 1.0, blur: 0.0, spread: 0.0, color: Color::WHITE.alpha(0.06), inset: false })
+                .radius(6.0)
+                .border(1.0, if open { c(ACCENTS[0]) } else { c(HAIR) })
                 .hover(Color::WHITE.alpha(0.04))
                 .on_press(|s: &mut Mixer| s.menu = if s.menu == Some(Menu::Midi) { None } else { Some(Menu::Midi) })
-                .child(led(Some(s.midi_health()), 8.0))
-                .child(label("MIDI", 10.0, 700.0, "#7D8494"))
-                .child(label(port, 12.0, 600.0, "#E4E7EE").grow(1.0).truncate())
-                .child(label("▾", 11.0, 600.0, "#7D8494")),
-        )
-        .child(
-            row()
-                .key("pipewire")
-                .gap(7.0)
-                .center_y()
-                .child(led(Some(s.pipewire_health), 8.0))
-                .child(label("PipeWire", 11.0, 600.0, "#9AA1B0")),
+                .child(dot(Some(health_color(s.midi_health())), 6.0))
+                .child(label("MIDI", 10.0, 600.0, FAINT))
+                .child(label(port, 12.0, 500.0, TEXT).grow(1.0).truncate())
+                .child(label("▾", 10.0, 500.0, FAINT)),
         )
 }
 
-fn strip(s: &Mixer, index: usize) -> El {
+fn strip(s: &Mixer, index: usize, fader_h: f32, compact: bool) -> El {
     let accent = c(ACCENTS[index]);
     let volume = s.config.fader_volumes[index];
     let lit = s.touched_at[index].is_some_and(|at| at.elapsed() < ACTIVITY);
     col()
         .key(format!("strip-{index}"))
-        .w(STRIP_W)
-        .padding(10.0)
-        .gap(9.0)
-        .radius(10.0)
-        .gradient(c("#2B2F37"), c("#1C1F25"))
-        .border_gradient(1.0, Color::WHITE.alpha(0.10), Color::BLACK.alpha(0.6))
-        .shadow(4.0, 14.0, Color::BLACK.alpha(0.55))
-        .child(plate(s, index, accent))
+        .w(0.0)
+        .grow(1.0)
+        .min_w(84.0)
+        .px(10.0)
+        .pt(12.0)
+        .pb(12.0)
+        .gap(10.0)
+        .child(el().key("tag").h(2.0).w_full().radius(1.0).fill(if lit { accent } else { accent.alpha(0.45) }))
+        .child(name_plate(s, index, accent))
         .child(
             row()
-                .key("fader-bay")
-                .h(FADER_H + 12.0)
-                .w_full()
-                .py(6.0)
-                .radius(7.0)
-                .fill(Color::BLACK.alpha(0.18))
-                .justify_center()
-                .child(scale())
-                .child(fader(index, volume, accent)),
+                .key("level")
+                .px(6.0)
+                .gap(4.0)
+                .items_end()
+                .child(text(level_number(volume)).font(TextStyle::new(22.0, 500.0).features("'tnum' 1")).color(c(TEXT)))
+                .child(label("dB", 11.0, 500.0, FAINT).mb(3.0)),
         )
-        .child(readout(index, volume, accent, lit))
+        .child(fader(index, volume, fader_h, accent))
         .child(mute_button(s, index))
-        .child(binding_chip(s, index, false, accent))
-        .child(binding_chip(s, index, true, accent))
+        .child(
+            col()
+                .key("bindings")
+                .gap(2.0)
+                .child(binding_chip(s, index, false, accent, compact))
+                .child(binding_chip(s, index, true, accent, compact)),
+        )
 }
 
-fn plate(s: &Mixer, index: usize, accent: Color) -> El {
+fn name_plate(s: &Mixer, index: usize, accent: Color) -> El {
     let health = if s.is_live(index) {
         Some(Health::Good)
     } else if s.is_present(index) {
@@ -292,13 +309,11 @@ fn plate(s: &Mixer, index: usize, accent: Color) -> El {
         .label(format!("Strip {} assignment", index + 1))
         .focusable(true)
         .w_full()
-        .h(46.0)
-        .px(8.0)
-        .py(6.0)
+        .px(6.0)
+        .py(5.0)
         .gap(2.0)
         .radius(6.0)
-        .gradient(c("#15171C"), c("#1A1D22"))
-        .border(1.0, if open { accent } else { Color::BLACK.alpha(0.7) })
+        .fill(if open { accent.alpha(0.12) } else { Color::TRANSPARENT })
         .hover(Color::WHITE.alpha(0.04))
         .on_press(move |s: &mut Mixer| {
             s.menu = if s.menu == Some(Menu::Assign(index)) { None } else { Some(Menu::Assign(index)) };
@@ -307,51 +322,49 @@ fn plate(s: &Mixer, index: usize, accent: Color) -> El {
             row()
                 .gap(6.0)
                 .center_y()
-                .child(led(health, 7.0))
-                .child(label(s.strip_title(index), 12.0, 650.0, "#EEF0F5").grow(1.0).truncate())
-                .child(label("▾", 10.0, 600.0, "#6E7584")),
+                .child(dot(health.map(health_color), 6.0))
+                .child(label(s.strip_title(index), 13.0, 600.0, TEXT).grow(1.0).truncate())
+                .child(label("▾", 10.0, 500.0, FAINT)),
         )
-        .child(label(s.strip_detail(index), 10.0, 500.0, "#7D8494").truncate())
-        .child(el().size(18.0, 2.0).absolute(8.0, 0.0).radius(1.0).fill(accent))
+        .child(label(s.strip_detail(index), 11.0, 400.0, FAINT).truncate())
 }
 
-fn scale() -> El {
-    let mut scale = el().key("scale").size(SCALE_W, FADER_H).a11y_hidden();
-    for mark in MARKS {
-        let y = cap_top(volume_at(mark)) + CAP_H / 2.0;
+fn scale(height: f32) -> El {
+    let marks: &[f32] = if height < 200.0 { &SHORT_MARKS } else { &MARKS };
+    let mut scale = el().key("scale").w(SCALE_W).h_full().a11y_hidden();
+    for &mark in marks {
+        let y = handle_y(volume_at(mark), height);
         let name = if mark == 0.0 { "0".to_owned() } else { format!("{}", mark as i32).replace('-', "−") };
         scale = scale
-            .child(
-                text(name)
-                    .font(mono(8.5, 500.0))
-                    .color(c(if mark == 0.0 { "#C9CEDA" } else { "#6E7584" }))
-                    .w(SCALE_W - 9.0)
-                    .align(Align::End)
-                    .absolute(0.0, y - 6.0),
-            )
-            .child(el().size(5.0, 1.0).absolute(SCALE_W - 6.0, y).fill(c("#6E7584")));
+            .child(mono(name, 9.0, c(if mark == 0.0 { DIM } else { FAINT })).w(SCALE_W - 7.0).align(Align::End).absolute(0.0, y - 6.0))
+            .child(el().size(4.0, 1.0).absolute(SCALE_W - 4.0, y).fill(c(HAIR)));
     }
-    scale.child(text("−∞").font(mono(8.5, 500.0)).color(c("#6E7584")).w(SCALE_W - 9.0).align(Align::End).absolute(0.0, FADER_H - CAP_H / 2.0 - 6.0))
+    scale
 }
 
-fn fader(index: usize, volume: f32, accent: Color) -> El {
-    let top = cap_top(volume);
-    let groove = 6.0;
-    let to_volume = |y: f32| (1.0 - (y - CAP_H / 2.0) / TRAVEL).clamp(0.0, 1.0);
-    let mut cap = el()
-        .key("cap")
-        .size(CAP_W, CAP_H)
-        .absolute(0.0, top)
-        .radius(4.0)
-        .gradient(c("#EEF1F6"), c("#8E95A2"))
-        .border(1.0, Color::BLACK.alpha(0.55))
-        .shadow(4.0, 9.0, Color::BLACK.alpha(0.6))
+fn fader(index: usize, volume: f32, height: f32, accent: Color) -> El {
+    let y = handle_y(volume, height);
+    let top = FADER_PAD + HANDLE_H / 2.0;
+    let bottom = height - top;
+    let track_x = (HANDLE_W - TRACK_W) / 2.0;
+    let track = el()
+        .key("track")
+        .w(HANDLE_W)
+        .h_full()
+        .child(el().key("groove").size(TRACK_W, (bottom - top).max(0.0)).absolute(track_x, top).radius(TRACK_W / 2.0).fill(c(HAIR)))
+        .child(el().key("fill").size(TRACK_W, (bottom - y).max(0.0)).absolute(track_x, y).radius(TRACK_W / 2.0).fill(accent))
+        .child(
+            el().key("handle")
+                .size(HANDLE_W, HANDLE_H)
+                .absolute(0.0, y - HANDLE_H / 2.0)
+                .radius(3.0)
+                .fill(c(TEXT))
+                .shadow(1.0, 3.0, Color::BLACK.alpha(0.5)),
+        )
         .a11y_hidden();
-    for offset in [-7.0, -4.0, 4.0, 7.0] {
-        cap = cap.child(el().size(CAP_W - 14.0, 1.0).absolute(6.0, CAP_H / 2.0 + offset - 0.5).fill(Color::BLACK.alpha(0.22)));
-    }
-    cap = cap.child(el().size(CAP_W - 8.0, 2.0).absolute(3.0, CAP_H / 2.0 - 2.0).radius(1.0).fill(accent));
-    el().key(format!("fader-{index}"))
+    // The whole width takes the drag, not just the handle.
+    row()
+        .key(format!("fader-{index}"))
         .role("slider")
         .label(format!("Strip {} level", index + 1))
         .range_value(f64::from(volume), 0.0, 1.0)
@@ -359,148 +372,96 @@ fn fader(index: usize, volume: f32, accent: Color) -> El {
         .a11y_value(decibels(volume))
         .on_step(move |s: &mut Mixer, steps, _| s.set_volume(index, s.config.fader_volumes[index] + steps as f32 * 0.01))
         .on_step_limit(move |s: &mut Mixer, max, _| s.set_volume(index, if max { 1.0 } else { 0.0 }))
-        .size(CAP_W, FADER_H)
-        .ml(4.0)
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .justify_center()
         .on_drag(move |s: &mut Mixer, d: &mut Drag, tx| match d.phase {
             Phase::Down => {
+                let at = handle_y(s.config.fader_volumes[index], d.h);
                 if d.clicks == 2 {
                     // A double press puts the fader back at unity.
                     s.set_volume(index, 1.0);
-                }
-                let top = cap_top(s.config.fader_volumes[index]);
-                if !(top..top + CAP_H).contains(&d.y) {
-                    // Pressed the groove: the cap jumps there and drags from it.
-                    s.set_volume(index, to_volume(d.y));
+                } else if (d.y - at).abs() > HANDLE_H {
+                    // Pressed beside the handle: it jumps there and drags from it.
+                    s.set_volume(index, 1.0 - (d.y - FADER_PAD - HANDLE_H / 2.0) / travel(d.h));
                 }
                 d.data = s.config.fader_volumes[index];
             }
             Phase::Move => {
-                s.set_volume(index, d.data - (d.y - d.start_y) / TRAVEL);
+                s.set_volume(index, d.data - (d.y - d.start_y) / travel(d.h));
                 tx.instant();
             }
             Phase::Up => {}
         })
-        .child(
-            el().key("groove")
-                .size(groove, TRAVEL)
-                .absolute((CAP_W - groove) / 2.0, CAP_H / 2.0)
-                .radius(groove / 2.0)
-                .fill(c("#08090B"))
-                .box_shadow(Shadow { x: 0.0, y: 1.0, blur: 2.0, spread: 0.0, color: Color::BLACK, inset: true })
-                .border(1.0, Color::WHITE.alpha(0.05))
-                .a11y_hidden(),
-        )
-        .child(
-            el().key("fill")
-                .size(groove - 2.0, (FADER_H - CAP_H / 2.0 - (top + CAP_H / 2.0)).max(0.0))
-                .absolute((CAP_W - groove) / 2.0 + 1.0, top + CAP_H / 2.0)
-                .radius(groove / 2.0)
-                .gradient(accent, accent.alpha(0.35))
-                .shadow(0.0, 10.0, accent.alpha(0.55))
-                .a11y_hidden(),
-        )
-        .child(cap)
-}
-
-fn readout(index: usize, volume: f32, accent: Color, lit: bool) -> El {
-    row()
-        .key(format!("readout-{index}"))
-        .w_full()
-        .h(32.0)
-        .px(8.0)
-        .center_y()
-        .radius(5.0)
-        .fill(c("#0A0E0D"))
-        .border(1.0, Color::BLACK)
-        .box_shadow(Shadow { x: 0.0, y: 2.0, blur: 6.0, spread: 0.0, color: Color::BLACK.alpha(0.9), inset: true })
-        .child(text(decibels(volume)).font(mono(13.0, 600.0)).color(accent).grow(1.0))
-        .child(
-            col()
-                .items_end()
-                .gap(3.0)
-                .child(text(format!("{:.0}%", volume * 100.0)).font(mono(9.0, 500.0)).color(c("#6E7584")))
-                .child(led(lit.then_some(Health::Good), 5.0)),
-        )
-        .a11y_hidden()
+        .child(scale(height))
+        .child(track)
+        .child(el().w(SCALE_W))
 }
 
 fn mute_button(s: &Mixer, index: usize) -> El {
     let muted = s.muted[index];
-    let mut button = row()
+    let button = row()
         .key(format!("mute-{index}"))
         .role("switch")
         .label(format!("Mute strip {}", index + 1))
         .checked(muted)
         .focusable(true)
         .w_full()
-        .h(30.0)
+        .h(28.0)
         .center()
         .radius(6.0)
         .on_press(move |s: &mut Mixer| s.set_muted(index, !s.muted[index]));
-    button = if muted {
-        button
-            .gradient(c("#FF6B7A"), c("#C7303F"))
-            .border(1.0, c("#FF9AA5").alpha(0.6))
-            .shadow(0.0, 16.0, c("#FF4D5E").alpha(0.55))
-            .child(label("MUTED", 11.0, 800.0, "#FFFFFF").a11y_hidden())
+    if muted {
+        button.fill(c(RED)).child(label("Muted", 12.0, 600.0, "#FFFFFF").a11y_hidden())
     } else {
-        button
-            .gradient(c("#353A44"), c("#262A31"))
-            .border_gradient(1.0, Color::WHITE.alpha(0.10), Color::BLACK.alpha(0.6))
-            .shadow(2.0, 4.0, Color::BLACK.alpha(0.5))
-            .hover(Color::WHITE.alpha(0.05))
-            .child(label("MUTE", 11.0, 800.0, "#9AA1B0").a11y_hidden())
-    };
-    button
+        button.border(1.0, c(HAIR)).hover(Color::WHITE.alpha(0.04)).child(label("Mute", 12.0, 500.0, DIM).a11y_hidden())
+    }
 }
 
-fn binding_chip(s: &Mixer, index: usize, mute: bool, accent: Color) -> El {
+fn binding_chip(s: &Mixer, index: usize, mute: bool, accent: Color, compact: bool) -> El {
     let learn = if mute { Learn::Mute(index) } else { Learn::Fader(index) };
     let learning = s.learning == Some(learn);
     let bound = if mute { s.config.mute_controls[index] } else { s.config.fader_controls[index] };
-    let value = if learning {
-        "LISTENING…".to_owned()
+    let (value, color) = if learning {
+        ("Listening…".to_owned(), accent)
     } else {
-        bound.as_ref().map_or_else(|| "LEARN".to_owned(), Control::label)
+        match bound {
+            Some(control) => (control.label(), c(DIM)),
+            None => ("Learn".to_owned(), c(FAINT)),
+        }
     };
-    row()
+    let mut chip = row()
         .key(format!("{}-learn-{index}", if mute { "mute" } else { "fader" }))
         .role("button")
         .label(format!("Learn the {} control for strip {}", if mute { "mute" } else { "fader" }, index + 1))
         .help("Press, then move a fader or press a button on the controller. Right-click to unbind.")
         .focusable(true)
         .w_full()
-        .h(21.0)
+        .h(22.0)
         .px(6.0)
-        .gap(5.0)
+        .gap(4.0)
         .center_y()
-        .radius(4.0)
-        .fill(if learning { accent.alpha(0.18) } else { Color::BLACK.alpha(0.25) })
-        .border(1.0, if learning { accent } else { Color::WHITE.alpha(0.05) })
-        .hover(Color::WHITE.alpha(0.05))
+        .radius(5.0)
+        .fill(if learning { accent.alpha(0.12) } else { Color::TRANSPARENT })
+        .hover(Color::WHITE.alpha(0.04))
         .on_press(move |s: &mut Mixer| s.learning = if s.learning == Some(learn) { None } else { Some(learn) })
         .on_secondary_press(move |s: &mut Mixer, _, _| {
             let list = if mute { &mut s.config.mute_controls } else { &mut s.config.fader_controls };
             list[index] = None;
             s.learning = None;
             s.schedule_save();
-        })
-        .child(text(if mute { "MUTE" } else { "FADER" }).font(mono(8.0, 700.0)).color(c("#6E7584")).a11y_hidden())
-        .child(
-            text(value)
-                .font(mono(8.5, 600.0))
-                .color(if learning { accent } else if bound.is_some() { c("#C9CEDA") } else { c("#6E7584") })
-                .grow(1.0)
-                .align(Align::End)
-                .truncate()
-                .a11y_hidden(),
-        )
+        });
+    if !compact {
+        chip = chip.child(label(if mute { "Mute" } else { "Fader" }, 10.0, 500.0, FAINT).a11y_hidden());
+    }
+    chip.child(mono(value, 9.5, color).grow(1.0).align(Align::End).truncate().a11y_hidden())
 }
 
 fn footer(s: &Mixer) -> El {
     let (status, color) = match &s.error {
-        Some(error) => (error.clone(), "#FF8A96"),
-        None => (format!("{}  ·  {}", s.pipewire_status, s.midi_status), "#7D8494"),
+        Some(error) => (error.clone(), "#FF8A8E"),
+        None => (format!("{}  ·  {}", s.pipewire_status, s.midi_status), FAINT),
     };
     let mode = |name: &'static str, mode: MuteMode| {
         let on = s.config.mute_mode == mode;
@@ -513,24 +474,25 @@ fn footer(s: &Mixer) -> El {
             .px(9.0)
             .center()
             .radius(4.0)
-            .fill(if on { c("#3A3F4A") } else { Color::TRANSPARENT })
-            .hover(Color::WHITE.alpha(0.05))
+            .fill(if on { c(HAIR) } else { Color::TRANSPARENT })
+            .hover(Color::WHITE.alpha(0.04))
             .on_press(move |s: &mut Mixer| {
                 s.config.mute_mode = mode;
                 s.schedule_save();
             })
-            .child(label(name, 10.0, 700.0, if on { "#EEF0F5" } else { "#7D8494" }).a11y_hidden())
+            .child(label(name, 11.0, 500.0, if on { TEXT } else { DIM }).a11y_hidden())
     };
     let tray = s.config.close_to_tray;
+    let knob = 10.0;
     row()
         .key("footer")
         .h(40.0)
         .w_full()
-        .px(18.0)
-        .gap(10.0)
+        .px(16.0)
+        .gap(12.0)
         .center_y()
-        .fill(Color::BLACK.alpha(0.25))
-        .child(label(status, 11.0, 500.0, color).grow(1.0).truncate())
+        .fill(c(PANEL))
+        .child(label(status, 11.0, 400.0, color).grow(1.0).min_w(0.0).truncate())
         .child(
             row()
                 .key("tray")
@@ -539,18 +501,25 @@ fn footer(s: &Mixer) -> El {
                 .help(if s.tray_available { "Closing the window keeps the mixer running in the tray." } else { "No system tray, so closing the window quits." })
                 .checked(tray)
                 .focusable(true)
-                .h(22.0)
-                .px(8.0)
-                .gap(6.0)
+                .h(24.0)
+                .px(6.0)
+                .gap(7.0)
                 .center_y()
-                .radius(4.0)
-                .hover(Color::WHITE.alpha(0.05))
+                .radius(5.0)
+                .hover(Color::WHITE.alpha(0.04))
                 .on_press(|s: &mut Mixer| {
                     s.config.close_to_tray = !s.config.close_to_tray;
                     s.schedule_save();
                 })
-                .child(led(tray.then_some(Health::Good), 6.0))
-                .child(label("Close to tray", 10.0, 700.0, if s.tray_available { "#9AA1B0" } else { "#5A6070" }).a11y_hidden()),
+                .child(
+                    el().key("switch")
+                        .size(24.0, 14.0)
+                        .radius(7.0)
+                        .fill(if tray { c(ACCENTS[0]) } else { c(HAIR) })
+                        .child(el().size(knob, knob).radius(knob / 2.0).absolute(if tray { 12.0 } else { 2.0 }, 2.0).fill(Color::WHITE))
+                        .a11y_hidden(),
+                )
+                .child(label("Close to tray", 11.0, 500.0, if s.tray_available { DIM } else { FAINT }).a11y_hidden()),
         )
         .child(
             row()
@@ -559,7 +528,7 @@ fn footer(s: &Mixer) -> El {
                 .label("Mute buttons")
                 .padding(2.0)
                 .radius(6.0)
-                .fill(Color::BLACK.alpha(0.35))
+                .border(1.0, c(HAIR))
                 .child(mode("Latch", MuteMode::Latch))
                 .child(mode("Toggle", MuteMode::Toggle)),
         )
@@ -568,19 +537,18 @@ fn footer(s: &Mixer) -> El {
                 .role("button")
                 .label("Rescan audio and MIDI")
                 .focusable(true)
-                .h(24.0)
+                .h(26.0)
                 .px(10.0)
                 .center()
-                .radius(5.0)
-                .gradient(c("#353A44"), c("#262A31"))
-                .border_gradient(1.0, Color::WHITE.alpha(0.10), Color::BLACK.alpha(0.6))
-                .hover(Color::WHITE.alpha(0.05))
+                .radius(6.0)
+                .border(1.0, c(HAIR))
+                .hover(Color::WHITE.alpha(0.04))
                 .on_press(|s: &mut Mixer| {
                     s.error = None;
                     s.rescan();
                     s.refresh_midi();
                 })
-                .child(label("Rescan", 10.0, 700.0, "#C9CEDA").a11y_hidden()),
+                .child(label("Rescan", 11.0, 500.0, DIM).a11y_hidden()),
         )
 }
 
@@ -619,7 +587,7 @@ fn menu_panel(s: &Mixer, menu: Menu) -> El {
                 items.push((saved.clone(), format!("{} (unplugged)", port_title(saved)), Some(Health::Waiting), true));
             }
             items.push((MIDI_DISCONNECTED.to_owned(), "Off".to_owned(), None, s.config.midi_port == MIDI_DISCONNECTED));
-            ("midi-button".to_owned(), c("#5BC0EB"), items)
+            ("midi-button".to_owned(), c(ACCENTS[0]), items)
         }
     };
     let mut list = col().key("items").role("menu").gap(1.0).padding(4.0);
@@ -637,8 +605,7 @@ fn menu_panel(s: &Mixer, menu: Menu) -> El {
                 .gap(8.0)
                 .center_y()
                 .radius(5.0)
-                .fill(if chosen { accent.alpha(0.16) } else { Color::TRANSPARENT })
-                .hover(Color::WHITE.alpha(0.07))
+                .hover(Color::WHITE.alpha(0.05))
                 .on_press(move |s: &mut Mixer| {
                     match menu {
                         Menu::Assign(index) => s.assign(index, &id),
@@ -646,22 +613,22 @@ fn menu_panel(s: &Mixer, menu: Menu) -> El {
                     }
                     s.menu = None;
                 })
-                .child(led(health, 6.0))
-                .child(label(name, 12.0, if chosen { 650.0 } else { 500.0 }, if chosen { "#FFFFFF" } else { "#C9CEDA" }).grow(1.0).truncate().a11y_hidden())
-                .child(text(if chosen { "●" } else { "" }).font(style(8.0, 700.0)).color(accent).a11y_hidden()),
+                .child(dot(health.map(health_color), 6.0))
+                .child(label(name, 12.0, if chosen { 600.0 } else { 400.0 }, if chosen { TEXT } else { DIM }).grow(1.0).truncate().a11y_hidden())
+                .child(text(if chosen { "✓" } else { "" }).font(TextStyle::new(11.0, 600.0)).color(accent).a11y_hidden()),
         );
     }
     col()
         .key("menu")
-        .w(260.0)
+        .w(240.0)
         .max_h(340.0)
         .radius(8.0)
-        .fill(c("#23262D"))
-        .border(1.0, Color::BLACK.alpha(0.8))
-        .shadow(10.0, 30.0, Color::BLACK.alpha(0.6))
+        .fill(c("#1F2126"))
+        .border(1.0, c(HAIR))
+        .shadow(8.0, 24.0, Color::BLACK.alpha(0.5))
         .clip_rounded(8.0)
         .child(list.scroll(ScrollSpec { stick_bottom: false }).shrink().min_h(0.0))
-        .anchored_fit(anchor, Side::Bottom, Align::Start, 6.0)
+        .anchored_fit(anchor, Side::Bottom, Align::Start, 4.0)
         .modal(true, |s: &mut Mixer| s.menu = None)
 }
 
@@ -713,5 +680,11 @@ mod tests {
         assert_eq!(decibels(0.5), "−18.1 dB");
         assert_eq!(decibels(0.0), "−∞ dB");
         assert!((volume_at(-18.0) - 0.501).abs() < 0.001);
+    }
+
+    #[test]
+    fn the_handle_spans_the_fader() {
+        assert_eq!(handle_y(1.0, 300.0), FADER_PAD + HANDLE_H / 2.0);
+        assert_eq!(handle_y(0.0, 300.0), 300.0 - FADER_PAD - HANDLE_H / 2.0);
     }
 }

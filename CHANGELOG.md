@@ -7,12 +7,12 @@ Each release adds its notes at the top; see docs/release.md.
 
 ### Changed
 
-- Viper Mixer has warm orange, amber and lime colours and a matching orange icon, so it no longer looks like Viper Music on the taskbar or side by side.
-- Viper Mixer looks like a hardware console, with a dark icon to match. Each strip has a power button that glows while it plays and mutes it when pressed, its level on a black bar, and a ribbed fader beside a column of lights. Check for updates is now in the header.
+- Viper Mixer has a warm amber accent and a dark icon, so it no longer looks like Viper Music on the taskbar or side by side.
+- Viper Mixer looks like a hardware console. Each strip has a power button that mutes it when pressed and glows red while it's muted, its level on a black bar, and a ribbed fader beside a column of lights. Check for updates is now in the header.
 
 ### Fixed
 
-- In a large or maximized window, the strips stop growing once they reach a comfortable size and stay in the middle, so the faders no longer stretch out of shape.
+- In a large or maximized window, everything grows evenly to fill it, so the faders no longer stretch out of shape.
 
 ### Removed
 

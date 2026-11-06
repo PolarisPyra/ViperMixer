@@ -15,3 +15,79 @@ Each release adds its notes at the top; see docs/release.md.
 - Each strip can now learn its fader from your controller, and its mute from any button, not only ones that send notes: press Fader or Mute under a strip, then move a fader or press a button. Right-click it to unbind it.
 - Mute buttons can follow a latching switch or flip on each press of a button that springs back; choose Latch or Toggle in the footer.
 - Your MIDI controller is found again after you unplug it or plug it into another USB port, and the MIDI menu shows which device is connected.
+
+## [0.5.3] - 2026-10-24
+
+### Fixed
+
+- Fix the release workflow's version step so the workflow file parses
+
+## [0.5.2] - 2026-10-24
+
+### Added
+
+- Add CLAUDE.md with the release procedure
+
+### Changed
+
+- Change the CLAUDE.md PATH note for the Bash tool
+- Change releases to set the version from the release script
+
+### Fixed
+
+- Fix reopening Viper Mixer from the app menu while it runs in the tray
+
+## [0.5.1] - 2026-10-21
+
+### Changed
+
+- Change the tray to open its menu on left click
+
+## [0.5.0] - 2026-10-21
+
+### Added
+
+- Add build and release scripts
+
+### Other
+
+- Match ALSA streams by program and reopen the window from the tray
+
+## [0.1.1] - 2026-10-21
+
+### Other
+
+- Skip AppImage build for tags that already have a release
+
+## [0.1.0] - 2026-10-21
+
+### Added
+
+- Add Viper MIDI Mixer app and AppImage builder
+- Show mixer in application launcher
+- Add AppImage release workflow with git-cliff notes
+
+### Changed
+
+- Use viper-mixer config directory
+- Update app icon to native 512px asset
+
+### Fixed
+
+- Fix close to tray and rename app to Viper Mixer
+- Fix mixer tray close and reopen lifecycle
+- Fix faders driving every node of an app
+- Fix release notes output in AppImage workflow
+
+### Other
+
+- First commit
+- Keep mixer in tray and enforce single instance
+- Combine Arch install and uninstall script
+- Shut down mixer engine on app exit
+- Logo change
+- Speed up mixer startup
+- Keep mixer running when window closes
+- Logo
+
+

@@ -3,6 +3,12 @@
 All notable changes to Viper Mixer are documented here, for the people who use it.
 Each release adds its notes at the top; see docs/release.md.
 
+## [26.11.4] - 2026-11-15
+
+### Changed
+
+- The app icon is a green glass tile with three wide faders in yellow, pink and cyan, so it is easier to make out in the taskbar and tray.
+
 ## [26.11.3] - 2026-11-15
 
 ### Changed

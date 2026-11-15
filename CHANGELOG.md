@@ -3,6 +3,12 @@
 All notable changes to Viper Mixer are documented here, for the people who use it.
 Each release adds its notes at the top; see docs/release.md.
 
+## [26.11.5] - 2026-11-15
+
+### Fixed
+
+- After an update to a new icon, the title bar and taskbar kept showing the old icon while the tray showed the new one. The new icon now shows everywhere as soon as the updated app starts.
+
 ## [26.11.4] - 2026-11-15
 
 ### Changed

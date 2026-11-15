@@ -5,7 +5,8 @@
 //! (Gear Lever writes `viper_mixer.desktop`) with an icon copied out of the AppImage at the time,
 //! which an update never replaces. So each start of an AppImage writes the current icon into the
 //! icon theme and over the icon any Viper Mixer launcher points at, adds a hidden
-//! `viper-mixer.desktop` when there is no launcher by that name, and has the desktop read them again.
+//! `viper-mixer.desktop` when there is no launcher by that name, and has the desktop read them again,
+//! including the copies KWin and Plasma hold in memory.
 
 use std::path::{Path, PathBuf};
 
@@ -48,6 +49,10 @@ pub fn refresh() {
         run("update-desktop-database", &["-q"], &applications);
         // Plasma's application cache, which KWin finds the launcher for a window in.
         run("kbuildsycoca6", &[], Path::new(""));
+    }
+    if icon_changed || entries_changed {
+        // KWin and Plasma keep icons they have drawn in memory; this tells every KDE process to drop them.
+        run("dbus-send", &["--session", "--type=signal", "/KIconLoader", "org.kde.KIconLoader.iconChanged", "int32:0"], Path::new(""));
     }
 }
 

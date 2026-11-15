@@ -3,6 +3,16 @@
 All notable changes to Viper Mixer are documented here, for the people who use it.
 Each release adds its notes at the top; see docs/release.md.
 
+## [26.11.3] - 2026-11-15
+
+### Changed
+
+- The app icon in the menu, taskbar and tray is a frosted orange glass tile with three knobs and three faders.
+
+### Fixed
+
+- The title bar showed a generic icon when Viper Mixer was added to the menu by an AppImage manager, and the menu and taskbar kept the icon from the day it was added. Viper Mixer now puts its current icon in all three each time it starts.
+
 ## [26.11.2] - 2026-11-06
 
 ### Changed

@@ -3,6 +3,7 @@
 mod config;
 mod engine;
 mod instance;
+mod launcher;
 mod midi;
 mod mixer;
 mod signal;
@@ -56,6 +57,7 @@ fn main() {
             None
         }
     };
+    launcher::refresh();
     let signal = Signal::default();
     let mixer = Rc::new(RefCell::new(Mixer::new(Config::load())));
     {

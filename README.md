@@ -80,6 +80,12 @@ This builds the AppImage and installs it under `~/.local` (`bin/viper-mixer`, th
 `share/applications/viper-mixer.desktop`). Set `PREFIX` to install somewhere else. The
 installed AppImage keeps itself up to date.
 
+Each time the AppImage starts, it writes its icon into `~/.local/share/icons/hicolor` and over the
+icon of any launcher that starts it, so an update shows the new icon. If no launcher is named
+`viper-mixer.desktop`, after the app id the window reports, it adds a hidden one, because KWin finds
+the title bar icon by that name. An AppImage manager such as Gear Lever names the launcher
+differently.
+
 ## Regenerating files
 
 - `assets/logo.png` and `assets/tray.png` come from `assets/logo.svg`:

@@ -6,12 +6,12 @@ description = "A MIDI fader controller for PipeWire by Viper"
 license = "MIT"
 
 [dependencies]
-# Zed's GPU UI framework draws the window.
-gpui = "0.2.2"
-# The tray, over D-Bus, without a GTK main loop. `async-io` is the runtime GPUI already uses.
+# The window, and a buffer of its pixels to draw into on the CPU, and the text rasteriser.
+winit = { version = "0.30", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
+softbuffer = { version = "0.4", default-features = false, features = ["wayland", "wayland-dlopen", "x11", "x11-dlopen"] }
+ab_glyph = "0.2"
+# The tray, over D-Bus, without a GTK main loop. `async-io` is its lightest runtime.
 ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
 midir = "0.10"
-# These are already in GPUI's dependency tree, so they add nothing to the build.
-futures = "0.3"
 png = "0.18"
 serde_json = "1"

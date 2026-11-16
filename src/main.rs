@@ -6,6 +6,7 @@ mod instance;
 mod launcher;
 mod midi;
 mod mixer;
+mod paint;
 mod signal;
 mod stream;
 mod tray;
@@ -71,7 +72,7 @@ fn main() {
     instance::listen(move |_token| launches.show());
     // The window closes to the tray, where the mixer keeps following the controller until the
     // tray or another launch shows the window again.
-    while ui::run(mixer.clone(), signal.clone(), false) == ui::Exit::Hide && ui::wait_hidden(&mut mixer.borrow_mut(), &signal) {}
+    ui::run(mixer.clone(), signal.clone(), false);
     mixer.borrow_mut().save_now();
     // Restart pressed on the update banner: the new AppImage takes over this process. The lock
     // and the socket close with it, so the new copy starts as the only one.

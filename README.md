@@ -17,10 +17,10 @@ button mutes it.
 - Linux with PipeWire, and its `pw-dump` and `wpctl` tools (`pipewire-bin` on Debian and Ubuntu,
   `pipewire` on Arch and Fedora).
 - A USB MIDI controller. Any controller that sends control changes or notes works.
-- To build: Rust, a C compiler, `pkg-config`, and the headers for ALSA, fontconfig, FreeType,
-  Wayland and xkbcommon (`libasound2-dev libfontconfig-dev libfreetype-dev libwayland-dev
-  libxkbcommon-x11-dev` on Debian and Ubuntu; `alsa-lib fontconfig freetype2 wayland libxkbcommon-x11`
-  on Arch). The window draws with Vulkan, so running it needs a Vulkan driver.
+- To build: Rust, a C compiler, `pkg-config`, and the ALSA headers (`libasound2-dev` on Debian and
+  Ubuntu, `alsa-lib` on Arch).
+- The window draws on the CPU, so it needs no GPU driver. It runs on Wayland or X11 with
+  xkbcommon, and finds its font (Inter, or Adwaita Sans) with fontconfig's `fc-match`.
 
 ## Run
 
@@ -124,7 +124,8 @@ Releases follow [docs/release.md](docs/release.md). In short:
 | Path | What it holds |
 | --- | --- |
 | `src/main.rs` | Startup: the single-instance lock, the tray, and the window |
-| `src/ui.rs` | The window, drawn with [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), and its demo scenes |
+| `src/ui.rs` | The window, its layout and input, and its demo scenes |
+| `src/paint.rs` | Drawing shapes, shadows and text on the CPU into the window's pixels |
 | `src/mixer.rs` | The mixer's state: assignments, levels, mutes, learning, and reconnecting |
 | `src/engine.rs` | Worker threads that run `pw-dump` and `wpctl` |
 | `src/midi.rs` | MIDI messages, port names, and the connection to the controller |

@@ -24,6 +24,6 @@ Scope: this repo only (Viper Mixer). A bump or release request never covers the 
 
 - Check with `cargo clippy --all-targets` and `cargo test`. CI runs both.
 - Look at the window without touching the desktop: `scripts/screenshot.sh .scratch/shot.png SCENE` opens `--demo SCENE` in a headless KWin with its own D-Bus session and saves the window; the scenes are `SCENES` in `src/ui.rs` (`default`, `assign-menu`, `midi-menu`, `learning`, `update`, `disconnected`). Never run Spectacle against the real session. Write shots under `.scratch/`, which git ignores.
-- The window is GPUI from crates.io. `Cargo.lock` holds `libc` at 0.2.189 because GPUI's `xattr` uses `ENOATTR`, which later `libc` dropped; keep it there when updating (`cargo update -p libc --precise 0.2.189`).
-- Keep dependencies few. `futures`, `png` and `serde_json` are already in GPUI's tree. Add a crate only when the standard library or an existing dependency can't do the job.
+- The window is winit with softbuffer: `src/paint.rs` draws it on the CPU (ab_glyph rasterises the text), so the process holds no GPU driver and stays near 15 MB. Closing to the tray drops the window, its buffer and glyph cache; the event loop keeps running the mixer.
+- Keep dependencies few. Add a crate only when the standard library or an existing dependency can't do the job.
 - `assets/logo.png` and `assets/tray.png` are rendered from `assets/logo.svg`; the README says how.

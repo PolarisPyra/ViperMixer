@@ -3,6 +3,12 @@
 All notable changes to Viper Mixer are documented here, for the people who use it.
 Each release adds its notes at the top; see docs/release.md.
 
+## [26.11.6] - 2026-11-15
+
+### Changed
+
+- Viper Mixer now uses around 15 MB of memory instead of around 300 MB, because the window is drawn without the graphics card. It looks and works the same, and while it is closed to the tray it uses even less.
+
 ## [26.11.5] - 2026-11-15
 
 ### Fixed
